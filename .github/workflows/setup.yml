@@ -16,7 +16,7 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install requests
-      - run: python setup_notion.py
+      - run: python files/setup_notion.py
         env:
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
           PARENT_PAGE_ID: ${{ github.event.inputs.parent_page_id }}
