@@ -91,7 +91,7 @@ class Item:
 def parse(r: dict) -> Item:
     min_price = _int(r.get("notifyMinmaePrice1")) or _int(r.get("minmaePrice"))
     return Item(
-        key=r.get("docid", ""),
+        key=f'{r.get("boCd","")}{r.get("saNo","")}-{r.get("maemulSer","")}',
         case_no=r.get("srnSaNo", ""),
         court=f"{r.get('jiwonNm','')} {r.get('jpDeptNm','')}".strip(),
         building=r.get("buldNm", ""),
@@ -146,6 +146,7 @@ class CourtAuction:
         begin: dt.date | None = None,
         end: dt.date | None = None,
         max_pages: int = MAX_PAGES,
+        cond: str = "0004601",
     ) -> Iterator[Item]:
         """기간 내 부동산 물건을 페이지 끝까지 순회한다.
 
@@ -165,7 +166,7 @@ class CourtAuction:
                 },
                 "dma_srchGdsDtlSrchInfo": {
                     "mvprpRletDvsCd": "00031R",       # 부동산
-                    "cortAuctnSrchCondCd": "0004601",  # 기일별 검색
+                    "cortAuctnSrchCondCd": cond,
                     "rprsAdongSdCd": sido,
                     "rprsAdongSggCd": sigungu,
                     "rprsAdongEmdCd": dong,
@@ -223,6 +224,40 @@ class CourtAuction:
                     break
         return out
 
+    def discover_cases(
+        self,
+        name: str,
+        sido: str,
+        sigungu: str = "",
+        dong: str = "",
+        months: int = 6,
+        today: dt.date | None = None,
+        region_text: str = "",
+    ) -> tuple[set[tuple[str, str]], dict]:
+        """건물명으로 (법원코드, 내부사건번호) 집합을 찾는다.
+
+        기일별검색(0004601)과 매각예정물건(0004602)을 함께 훑는다.
+        유찰 횟수·기일은 여기서 판단하지 않는다. 정확한 값은 기일내역에서 본다.
+        """
+        today = today or dt.date.today()
+        target = norm(name)
+        cases: set[tuple[str, str]] = set()
+        hint: dict = {}
+        for cond in ("0004601", "0004602"):
+            for it in self.search(sido, sigungu, dong, today,
+                                  today + dt.timedelta(days=30 * months), cond=cond):
+                b = norm(it.building)
+                if not b or (target not in b and b not in target):
+                    continue
+                r = it.raw
+                if r.get("boCd") and r.get("saNo"):
+                    cases.add((r["boCd"], r["saNo"]))
+                hint = {"sigungu": (r.get("srchHjguSiguCd") or "")[2:],
+                        "dong": (r.get("srchHjguDongCd") or "")[5:]}
+        if not hint:
+            hint = self.resolve_region(region_text, sigungu)
+        return cases, hint
+
     def find_building(
         self,
         name: str,
@@ -275,3 +310,157 @@ def resolve_sido(text: str) -> str:
         if t.startswith(k):
             return v
     raise ValueError(f"시도를 알 수 없습니다: {text}")
+
+
+# ====================================================================== #
+#  사건번호 기반 정밀 추적 (기일내역)
+#
+#  물건검색(위)은 "매각공고가 반영된" 물건만 노출한다. 기일이 잡혀 있어도
+#  공고 전이면 검색에 안 나온다. 반면 기일내역 API는 법원 일정을 그대로
+#  보여주므로 유찰 횟수·다음 기일·최저매각가격을 정확히 알 수 있다.
+# ====================================================================== #
+
+CASE_URL = f"{BASE}/pgj/pgj15A/selectAuctnCsSrchRslt.on"
+DXDY_URL = f"{BASE}/pgj/pgj15A/selectCsDtlDxdyDts.on"
+COURT_URL = f"{BASE}/pgj/pgjComm/selectCortOfcCdLst.on"
+
+_CS_RE = re.compile(r"(\d{4})\s*타경\s*(\d+)")
+
+
+def parse_case_no(text: str) -> str:
+    """'2025타경1506', '2025 타경 1506' → '2025타경1506'"""
+    m = _CS_RE.search(text or "")
+    if not m:
+        raise ValueError(f"사건번호를 인식할 수 없습니다: {text}")
+    return f"{m.group(1)}타경{m.group(2)}"
+
+
+def _won(v) -> int:
+    return _int(re.sub(r"[^\d]", "", str(v or "")))
+
+
+def _dxdy_date(v: str) -> str:
+    """'2026.08.25(10:00)' → '2026-08-25'"""
+    m = re.match(r"(\d{4})\.(\d{2})\.(\d{2})", str(v or ""))
+    return f"{m.group(1)}-{m.group(2)}-{m.group(3)}" if m else ""
+
+
+class CaseTracker:
+    """법원 + 사건번호로 기일내역까지 조회한다."""
+
+    def __init__(self, client: CourtAuction | None = None):
+        self.c = client or CourtAuction()
+        self._courts: dict[str, str] = {}
+
+    # ---------------------------------------------------------- 법원코드
+    def courts(self) -> dict[str, str]:
+        if not self._courts:
+            r = self.c.s.post(COURT_URL, json={}, timeout=30).json()
+            for row in (r.get("data") or {}).get("result", []) or r.get("result", []):
+                self._courts[row["cortOfcNm"]] = row["cortOfcCd"]
+        return self._courts
+
+    def court_code(self, name: str) -> str:
+        n = (name or "").strip()
+        if n.startswith("B") and n[1:].isdigit():
+            return n
+        courts = self.courts()
+        if n in courts:
+            return courts[n]
+        cand = [(nm, cd) for nm, cd in courts.items() if n and n in nm]
+        if len(cand) == 1:
+            return cand[0][1]
+        if cand:
+            raise ValueError(f"법원이 모호합니다: {name} → {[c[0] for c in cand]}")
+        raise ValueError(f"법원을 찾을 수 없습니다: {name}")
+
+    # ------------------------------------------------------------ 조회
+    def _post(self, url: str, body: dict, pgmid: str) -> dict:
+        h = dict(self.c.s.headers)
+        h["SC-Pgmid"] = pgmid
+        last = None
+        for i in range(3):
+            try:
+                d = self.c.s.post(url, json=body, headers=h, timeout=40).json()
+                if d.get("errors"):
+                    last = RuntimeError(d["errors"].get("errorMessage"))
+                else:
+                    return d.get("data") or d
+            except Exception as e:                                # noqa: BLE001
+                last = e
+            time.sleep(2 * (i + 1))
+        raise last or RuntimeError("조회 실패")
+
+    def case_info(self, court: str, case_no: str) -> dict:
+        cd = self.court_code(court)
+        cs = parse_case_no(case_no)
+        return self._post(CASE_URL, {"dma_srchCsDtlInf": {"cortOfcCd": cd, "csNo": cs}},
+                          "PGJ15AF01")
+
+    def dxdy(self, court_code: str, cs_num: str) -> list[dict]:
+        """기일내역. 사건번호는 반드시 내부 숫자형(예 20250130001506)."""
+        d = self._post(DXDY_URL,
+                       {"dma_srchDxdyDtsLst": {"cortOfcCd": court_code, "csNo": cs_num}},
+                       "PGJ15AF02")
+        return d.get("dlt_dxdyDtsLst") or []
+
+    # ------------------------------------------------------------ 종합
+    def track(self, court: str, case_no: str,
+              today: dt.date | None = None) -> list[Item]:
+        """사건 하나의 물건들을 기일내역 기준으로 정리한다."""
+        today = today or dt.date.today()
+        info = self.case_info(court, case_no)
+        bas = info.get("dma_csBasInf") or {}
+        cs_num, cd = bas.get("csNo", ""), bas.get("cortOfcCd", "")
+        if not cs_num:
+            return []
+        court_nm = f"{bas.get('cortOfcNm','')} {bas.get('cortAuctnJdbnNm','')}".strip()
+        human = bas.get("userCsNo") or parse_case_no(case_no)
+
+        gds = {str(g.get("dspslGdsSeq")): g
+               for g in (info.get("dlt_dspslGdsDspslObjctLst") or [])}
+        objs = {str(o.get("dspslObjctSeq")): o
+                for o in (info.get("dlt_rletCsDspslObjctLst") or [])}
+
+        time.sleep(1.0)
+        rows = self.dxdy(cd, cs_num)
+        by_gds: dict[str, list[dict]] = {}
+        for r in rows:
+            by_gds.setdefault(str(r.get("dspslGdsSeq")), []).append(r)
+
+        out: list[Item] = []
+        for seq, drows in by_gds.items():
+            drows.sort(key=lambda r: _dxdy_date(r.get("dxdyTime")))
+            fail = sum(1 for r in drows if "유찰" in (r.get("dxdyRslt") or ""))
+            sale = [r for r in drows if "매각기일" == (r.get("auctnDxdyKndNm") or "")]
+            up = next((r for r in sale
+                       if not (r.get("dxdyRslt") or "").strip()
+                       and _dxdy_date(r.get("dxdyTime")) >= today.isoformat()), None)
+            if up is None:
+                continue                       # 다음 기일 미정 또는 종국
+            giil = _dxdy_date(up.get("dxdyTime"))
+            after = [r for r in drows if _dxdy_date(r.get("dxdyTime")) > giil]
+            nxt = next((r for r in after
+                        if "매각결정기일" == (r.get("auctnDxdyKndNm") or "")), None)
+            g = gds.get(seq, {})
+            o = objs.get(str(g.get("dspslObjctSeq", seq)), {})
+            appraisal = _int(g.get("aeeEvlAmt")) or _won(up.get("aeeEvlAmt"))
+            low = _won(up.get("tsLwsDspslPrc"))
+            out.append(Item(
+                key=f"{cd}{cs_num}-{seq}",
+                case_no=human if len(by_gds) == 1 else f"{human} ({seq})",
+                court=court_nm,
+                building=g.get("bldNm") or o.get("bldNm") or "",
+                detail=(g.get("bldDtlDts") or o.get("bldDtlDts") or "").strip(),
+                address=(o.get("userSt") or "").strip(),
+                appraisal=appraisal,
+                min_price=low,
+                price_rate=round(low / appraisal * 100) if appraisal and low else 0,
+                giil=giil,
+                next_giil=_dxdy_date(nxt.get("dxdyTime")) if nxt else "",
+                fail_count=fail,
+                area="",
+                raw={"ultmt": o.get("ultmtNm"), "prog": bas.get("csProgStatCd")},
+            ))
+        out.sort(key=lambda x: x.case_no)
+        return out
