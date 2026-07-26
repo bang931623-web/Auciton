@@ -34,6 +34,13 @@ HEADERS = {
 PAGE_SIZE = 40          # 40 이외의 값을 넣으면 서버가 500을 반환한다
 POLITE_DELAY = 1.5      # 페이지 간 대기(초). 공공 사이트이므로 반드시 유지
 MAX_PAGES = 300
+TIMEOUT = 15            # 40초는 차단 시 재시도까지 겹쳐 실행이 수십 분으로 늘어난다
+RETRY = 2
+FAIL_STREAK_LIMIT = 3   # 연속 실패가 이만큼이면 사이트/IP 문제로 보고 즉시 포기
+
+
+class SiteDown(RuntimeError):
+    """사이트 접속 자체가 안 되는 상황. 이때는 노션을 건드리면 안 된다."""
 
 # 법정동 표준코드 시도 코드 (사이트가 그대로 사용)
 SIDO = {
@@ -142,6 +149,10 @@ class CourtAuction:
         self.emd_seen: dict[tuple[str, str], str] = {}   # ('463','청라동') -> '122'
         # 물건키 -> '126.32㎡(37.9평)'  (면적은 물건검색·매각결과검색에만 들어있다)
         self.area_seen: dict[str, str] = {}
+        self.fail_streak = 0
+        self.req_count = 0
+        # (시도,시군구,읍면동) -> 물건 목록. 같은 지역 건물이 여럿이면 재사용한다
+        self._region_cache: dict[tuple[str, str, str], list] = {}
         self.s = session or requests.Session()
         self.s.headers.update(HEADERS)
         # 세션 쿠키(JSESSIONID) 확보
@@ -150,19 +161,39 @@ class CourtAuction:
         except requests.RequestException:
             pass
 
-    def _post(self, body: dict, retry: int = 3) -> dict:
+    def healthcheck(self) -> None:
+        """시작 전에 접속 가능한지 한 번만 확인한다."""
+        for i in range(3):
+            try:
+                r = self.s.get(REFERER, timeout=TIMEOUT)
+                if r.status_code < 500:
+                    return
+            except Exception:                # noqa: BLE001
+                pass
+            time.sleep(3)
+        raise SiteDown("법원경매정보에 접속할 수 없습니다 (방화벽 차단 또는 점검)")
+
+    def _guard(self) -> None:
+        if self.fail_streak >= FAIL_STREAK_LIMIT:
+            raise SiteDown(f"연속 {self.fail_streak}회 실패 — 중단합니다")
+
+    def _post(self, body: dict, retry: int = RETRY) -> dict:
+        self._guard()
         last = None
         for i in range(retry):
             try:
-                res = self.s.post(SEARCH_URL, json=body, timeout=40)
+                self.req_count += 1
+                res = self.s.post(SEARCH_URL, json=body, timeout=TIMEOUT)
                 data = res.json()
                 if data.get("errors"):
                     last = RuntimeError(data["errors"].get("errorMessage"))
                 else:
+                    self.fail_streak = 0
                     return data["data"]
             except Exception as e:          # noqa: BLE001
                 last = e
-            time.sleep(3 * (i + 1))
+            time.sleep(2 * (i + 1))
+        self.fail_streak += 1
         raise last or RuntimeError("검색 실패")
 
     def search(
@@ -247,17 +278,23 @@ class CourtAuction:
                     "pgmId": "PGJ158M01",
                 },
             }
-            for i in range(3):
+            self._guard()
+            data = None
+            for i in range(RETRY):
                 try:
-                    d = self.s.post(RESULT_URL, json=body, headers=h, timeout=40).json()
+                    self.req_count += 1
+                    d = self.s.post(RESULT_URL, json=body, headers=h,
+                                    timeout=TIMEOUT).json()
                     if d.get("errors"):
                         raise RuntimeError(d["errors"].get("errorMessage"))
                     data = d["data"]
+                    self.fail_streak = 0
                     break
                 except Exception:                                  # noqa: BLE001
-                    if i == 2:
-                        return
-                    time.sleep(3 * (i + 1))
+                    time.sleep(2 * (i + 1))
+            if data is None:
+                self.fail_streak += 1
+                raise SiteDown("매각결과검색 실패")
             rows = data.get("dlt_srchResult") or []
             total = _int(data.get("dma_pageInfo", {}).get("totalCnt"))
             if not rows:
@@ -329,15 +366,21 @@ class CourtAuction:
         target = norm(name)
         cases: set[tuple[str, str]] = set()
         hint: dict = {}
-        streams = [
-            self.search(sido, sigungu, dong, today,
-                        today + dt.timedelta(days=30 * months), cond="0004601"),
-            self.search(sido, sigungu, dong, today,
-                        today + dt.timedelta(days=30 * months), cond="0004602"),
-            self.search_results(sido, sigungu, dong),
-        ]
-        for stream in streams:
-            for it in stream:
+        ck = (sido, sigungu, dong)
+        if ck not in self._region_cache:
+            pool: list[Item] = []
+            for stream in (
+                self.search(sido, sigungu, dong, today,
+                            today + dt.timedelta(days=30 * months), cond="0004601"),
+                self.search(sido, sigungu, dong, today,
+                            today + dt.timedelta(days=30 * months), cond="0004602"),
+                self.search_results(sido, sigungu, dong),
+            ):
+                pool.extend(stream)
+            self._region_cache[ck] = pool
+            print(f"    지역 {ck} 물건 {len(pool)}건 수집 (요청 {self.req_count}회 누적)")
+        for _once in (0,):
+            for it in self._region_cache[ck]:
                 b = norm(it.building)
                 if not b or (target not in b and b not in target):
                     continue
@@ -471,17 +514,21 @@ class CaseTracker:
     def _post(self, url: str, body: dict, pgmid: str) -> dict:
         h = dict(self.c.s.headers)
         h["SC-Pgmid"] = pgmid
+        self.c._guard()
         last = None
-        for i in range(3):
+        for i in range(RETRY):
             try:
-                d = self.c.s.post(url, json=body, headers=h, timeout=40).json()
+                self.c.req_count += 1
+                d = self.c.s.post(url, json=body, headers=h, timeout=TIMEOUT).json()
                 if d.get("errors"):
                     last = RuntimeError(d["errors"].get("errorMessage"))
                 else:
+                    self.c.fail_streak = 0
                     return d.get("data") or d
             except Exception as e:                                # noqa: BLE001
                 last = e
             time.sleep(2 * (i + 1))
+        self.c.fail_streak += 1
         raise last or RuntimeError("조회 실패")
 
     def case_info(self, court: str, case_no: str) -> dict:

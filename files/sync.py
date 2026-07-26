@@ -24,7 +24,7 @@ import traceback
 import courtauction as ca
 import notion as no
 
-VERSION = "2.0 (사건번호 추적 + 매각결과검색)"
+VERSION = "2.1 (실패 시 삭제금지 + 조기중단)"
 TODAY = dt.date.today()
 ON_SOLD = os.environ.get("ON_SOLD", "archive")
 ACTIVE = ("진행", "관찰중")
@@ -59,14 +59,22 @@ def load_targets(n: no.Notion, db: str) -> list[dict]:
     return out
 
 
-def load_existing(n: no.Notion, db: str) -> dict[str, dict]:
+def load_existing(n: no.Notion, db: str) -> tuple[dict[str, dict], set[str]]:
+    """(물건키 -> 페이지, 현재 진행/관찰중인 물건키 집합)
+
+    상태로 걸러내지 않고 전부 색인한다. 휴지통에서 복원한 행이나 종료된 행도
+    같은 물건키면 새로 만들지 않고 그 행을 되살려 쓴다.
+    """
     idx: dict[str, dict] = {}
-    for st in ACTIVE:
-        for p in n.query(db, filter={"property": "상태", "select": {"equals": st}}):
-            k = no.read(p, "물건키")
-            if k:
-                idx[k] = p
-    return idx
+    active: set[str] = set()
+    for p in n.query(db):
+        k = no.read(p, "물건키")
+        if not k:
+            continue
+        idx[k] = p
+        if (no.read(p, "상태") or "") in ACTIVE:
+            active.add(k)
+    return idx, active
 
 
 # --------------------------------------------------------------- 쓰기
@@ -112,10 +120,18 @@ def main() -> int:
 
     client = ca.CourtAuction()
     tracker = ca.CaseTracker(client)
-    existing = load_existing(n, res_db)
+    try:
+        client.healthcheck()
+    except ca.SiteDown as e:
+        print(f"!! {e}")
+        print("!! 노션은 손대지 않고 그대로 종료합니다. 다음 실행에서 재시도합니다.")
+        return 0
+
+    existing, active = load_existing(n, res_db)
 
     # 이미 추적 중인 사건 — 공고에서 사라져도 계속 본다
     cases: set[tuple[str, str]] = set()
+    failures = 0
     for p in existing.values():
         tk = no.read(p, "추적키") or ""
         if ":" in tk:
@@ -132,7 +148,10 @@ def main() -> int:
                 if bas.get("csNo"):
                     cases.add((bas["cortOfcCd"], bas["csNo"]))
                     print(f"  직접등록 {t['name']} {raw} → {bas['csNo']}")
+            except ca.SiteDown:
+                raise
             except Exception as e:                                # noqa: BLE001
+                failures += 1
                 print(f"  직접등록 실패 {raw}: {e}")
                 n.update(t["page_id"], {"메모": no.txt(f"사건번호 조회 실패: {e}")})
 
@@ -144,7 +163,10 @@ def main() -> int:
             found, hint = client.discover_cases(
                 t["name"], t["sido"], t["sigungu"], t["dong"],
                 months=t["months"], today=TODAY, region_text=t["region_text"])
+        except ca.SiteDown:
+            raise
         except Exception as e:                                     # noqa: BLE001
+            failures += 1
             print("  검색 실패:", e)
             n.update(t["page_id"], {"메모": no.txt(f"검색 실패 {TODAY}: {e}")})
             continue
@@ -174,7 +196,10 @@ def main() -> int:
     for cd, cs in sorted(cases):
         try:
             items = tracker.track(cd, human_case_no(cs), today=TODAY)
+        except ca.SiteDown:
+            raise
         except Exception as e:                                     # noqa: BLE001
+            failures += 1
             print(f"  기일내역 실패 {cs}: {e}")
             continue
         for it in items:
@@ -195,7 +220,14 @@ def main() -> int:
                 watch += 1
 
     # ---------------- 3. 종료 처리 ----------------
-    gone = [k for k in existing if k not in alive]
+    # 조회 실패가 하나라도 있었다면 "사라졌다"고 단정할 수 없다. 절대 삭제하지 않는다.
+    if failures:
+        print(f"\n조회 실패 {failures}건 — 종료 처리를 건너뜁니다 "
+              f"(요청 {client.req_count}회)")
+        print(f"완료 — 신규 {added} / 갱신 {updated} / 관찰중 {watch} / 종료 보류")
+        return 0
+
+    gone = [k for k in active if k not in alive]
     for k in gone:
         page = existing[k]
         n.update(page["id"], {"상태": no.sel("종료(매각/취하)"),
@@ -203,13 +235,18 @@ def main() -> int:
         if ON_SOLD == "archive":
             n.archive(page["id"])
 
-    print(f"\n완료 — 신규 {added} / 갱신 {updated} / 관찰중 {watch} / 종료 {len(gone)}")
+    print(f"\n완료 — 신규 {added} / 갱신 {updated} / 관찰중 {watch} / "
+          f"종료 {len(gone)} (요청 {client.req_count}회)")
     return 0
 
 
 if __name__ == "__main__":
     try:
         sys.exit(main())
+    except ca.SiteDown as e:
+        print(f"!! 사이트 접속 불가로 중단: {e}")
+        print("!! 노션 데이터는 변경하지 않았습니다.")
+        sys.exit(0)
     except Exception:                                              # noqa: BLE001
         traceback.print_exc()
         sys.exit(1)
