@@ -122,6 +122,8 @@ CONFIG_SCHEMA: dict[str, Any] = {
     "최소유찰": {"number": {"format": "number"}},
     "활성": {"checkbox": {}},
     "검색개월": {"number": {"format": "number"}},
+    "사건번호": {"rich_text": {}},       # 직접 추적할 사건번호 (쉼표로 여러 개)
+    "법원": {"rich_text": {}},           # 사건번호를 적었을 때만 필요
     "시도코드": {"rich_text": {}},       # 아래 3개는 프로그램이 자동으로 채움
     "시군구코드": {"rich_text": {}},
     "읍면동코드": {"rich_text": {}},
@@ -144,9 +146,11 @@ RESULT_SCHEMA: dict[str, Any] = {
     "면적": {"rich_text": {}},
     "상태": {"select": {"options": [
         {"name": "진행", "color": "green"},
+        {"name": "관찰중", "color": "yellow"},
         {"name": "종료(매각/취하)", "color": "gray"},
     ]}},
     "물건키": {"rich_text": {}},
+    "추적키": {"rich_text": {}},
     "최초등록": {"date": {}},
     "최근확인": {"date": {}},
 }
