@@ -103,6 +103,7 @@ class Item:
     next_giil: str      # 매각결정기일 YYYY-MM-DD
     fail_count: int     # 유찰 횟수
     area: str           # 면적
+    dept: str = ""      # 담당계 (경매2계)
     raw: dict = field(default_factory=dict, repr=False)
 
     def as_row(self) -> dict:
@@ -116,7 +117,8 @@ def parse(r: dict) -> Item:
     return Item(
         key=f'{r.get("boCd","")}{r.get("saNo","")}-{r.get("maemulSer","")}',
         case_no=r.get("srnSaNo", ""),
-        court=f"{r.get('jiwonNm','')} {r.get('jpDeptNm','')}".strip(),
+        court=(r.get("jiwonNm") or "").strip(),
+        dept=(r.get("jpDeptNm") or "").strip(),
         building=r.get("buldNm", ""),
         detail=r.get("buldList", ""),
         address=r.get("printSt") or " ".join(
@@ -505,7 +507,11 @@ class CaseTracker:
         cs_num, cd = bas.get("csNo", ""), bas.get("cortOfcCd", "")
         if not cs_num:
             return []
-        court_nm = f"{bas.get('cortOfcNm','')} {bas.get('cortAuctnJdbnNm','')}".strip()
+        ofc = (bas.get("cortOfcNm") or "").strip()
+        spt = (bas.get("cortSptNm") or "").strip()
+        # 지원명이 본원명과 다르면 그 지원에서 진행, 같으면 본원
+        court_nm = f"{ofc} {spt}" if spt and spt != ofc else f"{ofc} 본원"
+        dept_nm = (bas.get("cortAuctnJdbnNm") or "").strip()
         human = bas.get("userCsNo") or parse_case_no(case_no)
 
         gds = {str(g.get("dspslGdsSeq")): g
@@ -541,6 +547,7 @@ class CaseTracker:
                 key=f"{cd}{cs_num}-{seq}",
                 case_no=human if len(by_gds) == 1 else f"{human} ({seq})",
                 court=court_nm,
+                dept=dept_nm,
                 building=g.get("bldNm") or o.get("bldNm") or "",
                 detail=(g.get("bldDtlDts") or o.get("bldDtlDts") or "").strip(),
                 address=(o.get("userSt") or "").strip(),
