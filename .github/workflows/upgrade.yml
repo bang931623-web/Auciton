@@ -1,0 +1,19 @@
+name: 0단계 - 노션 표 업그레이드 (1회)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  upgrade:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install requests
+      - run: python files/upgrade_notion.py
+        env:
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          CONFIG_DB_ID: ${{ secrets.CONFIG_DB_ID }}
+          RESULT_DB_ID: ${{ secrets.RESULT_DB_ID }}
