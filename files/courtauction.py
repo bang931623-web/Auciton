@@ -16,6 +16,7 @@ import requests
 
 BASE = "https://www.courtauction.go.kr"
 SEARCH_URL = f"{BASE}/pgj/pgjsearch/searchControllerMain.on"
+RESULT_URL = f"{BASE}/pgj/pgjsearch/selectDspslSchdRsltSrch.on"
 REFERER = f"{BASE}/pgj/index.on?w2xPath=/pgj/ui/pgj100/PGJ151F00.xml"
 
 HEADERS = {
@@ -191,6 +192,61 @@ class CourtAuction:
             page += 1
             time.sleep(POLITE_DELAY)
 
+    def search_results(
+        self,
+        sido: str,
+        sigungu: str = "",
+        dong: str = "",
+        max_pages: int = MAX_PAGES,
+    ) -> Iterator[Item]:
+        """매각결과검색 — 이미 기일을 치른 물건(유찰 포함)을 돌려준다.
+
+        공고 여부와 무관하므로, 유찰이 쌓인 물건은 반드시 여기에 남아 있다.
+        기간 조건이 없고 지역코드만 받는다.
+        """
+        page, seen, total = 1, set(), None
+        h = dict(self.s.headers)
+        h["SC-Pgmid"] = "PGJ158M02"
+        while page <= max_pages:
+            body = {
+                "dma_pageInfo": {
+                    "pageNo": page, "pageSize": PAGE_SIZE,
+                    "bfPageNo": max(1, page - 1), "startRowNo": 0, "totalYn": "Y",
+                },
+                "dma_srchGdsDtlSrchInfo": {
+                    "rprsAdongSdCd": sido,
+                    "rprsAdongSggCd": sigungu,
+                    "rprsAdongEmdCd": dong,
+                    "cortStDvs": "2",
+                    "pgmId": "PGJ158M01",
+                },
+            }
+            for i in range(3):
+                try:
+                    d = self.s.post(RESULT_URL, json=body, headers=h, timeout=40).json()
+                    if d.get("errors"):
+                        raise RuntimeError(d["errors"].get("errorMessage"))
+                    data = d["data"]
+                    break
+                except Exception:                                  # noqa: BLE001
+                    if i == 2:
+                        return
+                    time.sleep(3 * (i + 1))
+            rows = data.get("dlt_srchResult") or []
+            total = _int(data.get("dma_pageInfo", {}).get("totalCnt"))
+            if not rows:
+                return
+            for r in rows:
+                self._learn_region(r)
+                it = parse(r)
+                if it.key and it.key not in seen:
+                    seen.add(it.key)
+                    yield it
+            if len(seen) >= total or len(rows) < PAGE_SIZE:
+                return
+            page += 1
+            time.sleep(POLITE_DELAY)
+
     # ------------------------------------------------------------------ #
 
     def _learn_region(self, r: dict) -> None:
@@ -243,17 +299,24 @@ class CourtAuction:
         target = norm(name)
         cases: set[tuple[str, str]] = set()
         hint: dict = {}
-        for cond in ("0004601", "0004602"):
-            for it in self.search(sido, sigungu, dong, today,
-                                  today + dt.timedelta(days=30 * months), cond=cond):
+        streams = [
+            self.search(sido, sigungu, dong, today,
+                        today + dt.timedelta(days=30 * months), cond="0004601"),
+            self.search(sido, sigungu, dong, today,
+                        today + dt.timedelta(days=30 * months), cond="0004602"),
+            self.search_results(sido, sigungu, dong),
+        ]
+        for stream in streams:
+            for it in stream:
                 b = norm(it.building)
                 if not b or (target not in b and b not in target):
                     continue
                 r = it.raw
                 if r.get("boCd") and r.get("saNo"):
                     cases.add((r["boCd"], r["saNo"]))
-                hint = {"sigungu": (r.get("srchHjguSiguCd") or "")[2:],
-                        "dong": (r.get("srchHjguDongCd") or "")[5:]}
+                if r.get("srchHjguSiguCd"):
+                    hint = {"sigungu": (r.get("srchHjguSiguCd") or "")[2:],
+                            "dong": (r.get("srchHjguDongCd") or "")[5:]}
         if not hint:
             hint = self.resolve_region(region_text, sigungu)
         return cases, hint
