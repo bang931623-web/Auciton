@@ -1,0 +1,22 @@
+name: 1단계 - 노션 DB 만들기
+
+on:
+  workflow_dispatch:
+    inputs:
+      parent_page_id:
+        description: "노션 페이지 ID (페이지 URL 맨 끝 32자리)"
+        required: true
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install requests
+      - run: python setup_notion.py
+        env:
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          PARENT_PAGE_ID: ${{ github.event.inputs.parent_page_id }}
