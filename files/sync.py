@@ -24,6 +24,7 @@ import traceback
 import courtauction as ca
 import notion as no
 
+VERSION = "2.0 (사건번호 추적 + 매각결과검색)"
 TODAY = dt.date.today()
 ON_SOLD = os.environ.get("ON_SOLD", "archive")
 ACTIVE = ("진행", "관찰중")
@@ -70,7 +71,7 @@ def load_existing(n: no.Notion, db: str) -> dict[str, dict]:
 
 # --------------------------------------------------------------- 쓰기
 def props(it: ca.Item, status: str, track_key: str) -> dict:
-    return {
+    p = {
         "사건번호": no.title(it.case_no),
         "소재지 및 내역": no.txt(f"{it.building} {it.detail}".strip()),
         "감정평가액": no.num(it.appraisal),
@@ -86,6 +87,11 @@ def props(it: ca.Item, status: str, track_key: str) -> dict:
         "추적키": no.txt(track_key),
         "최근확인": no.date(TODAY.isoformat()),
     }
+    # 면적은 공고 전에는 법원이 제공하지 않는다.
+    # 값을 알아낸 뒤에는 유지하고, 모를 때는 기존 값을 지우지 않는다.
+    if it.area:
+        p["면적"] = no.txt(it.area)
+    return p
 
 
 def human_case_no(cs_num: str) -> str:
@@ -95,6 +101,7 @@ def human_case_no(cs_num: str) -> str:
 
 # --------------------------------------------------------------- 본체
 def main() -> int:
+    print(f"=== 경매 동기화 버전 {VERSION} / {TODAY} ===")
     n = no.Notion()
     cfg_db, res_db = os.environ["CONFIG_DB_ID"], os.environ["RESULT_DB_ID"]
 
