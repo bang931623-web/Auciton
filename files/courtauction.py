@@ -32,7 +32,7 @@ HEADERS = {
 
 PAGE_SIZE = 40          # 40 이외의 값을 넣으면 서버가 500을 반환한다
 POLITE_DELAY = 1.5      # 페이지 간 대기(초). 공공 사이트이므로 반드시 유지
-MAX_PAGES = 200
+MAX_PAGES = 300
 
 # 법정동 표준코드 시도 코드 (사이트가 그대로 사용)
 SIDO = {
@@ -112,6 +112,9 @@ def parse(r: dict) -> Item:
 
 class CourtAuction:
     def __init__(self, session: requests.Session | None = None):
+        # 조회 중 마주친 지역명 → 코드 (시군구 코드를 스스로 학습하는 용도)
+        self.sgg_seen: dict[str, str] = {}          # '용인시 기흥구' -> '463'
+        self.emd_seen: dict[tuple[str, str], str] = {}   # ('463','청라동') -> '122'
         self.s = session or requests.Session()
         self.s.headers.update(HEADERS)
         # 세션 쿠키(JSESSIONID) 확보
@@ -177,6 +180,7 @@ class CourtAuction:
             if not rows:
                 return
             for r in rows:
+                self._learn_region(r)
                 it = parse(r)
                 if it.key and it.key not in seen:
                     seen.add(it.key)
@@ -188,6 +192,37 @@ class CourtAuction:
 
     # ------------------------------------------------------------------ #
 
+    def _learn_region(self, r: dict) -> None:
+        sgg_nm, sgg_cd = r.get("hjguSigu", ""), r.get("daepyoSiguCd", "")
+        dong_nm, dong_cd = r.get("hjguDong", ""), r.get("daepyoDongCd", "")
+        if sgg_nm and sgg_cd:
+            self.sgg_seen[sgg_nm] = sgg_cd
+            # 동산 물건은 이 칸에 도로명이 들어오므로 행정구역 접미사로 걸러낸다
+            if dong_nm and dong_cd and dong_nm[-1] in "동리읍면가":
+                self.emd_seen[(sgg_cd, dong_nm)] = dong_cd
+
+    def resolve_region(self, region_text: str, sigungu: str = "") -> dict:
+        """'경기도 용인시 기흥구' 같은 문장에서 시군구·읍면동 코드를 뽑아낸다.
+
+        조회 중 실제로 마주친 지역명만 쓰므로 코드표를 들고 있을 필요가 없다.
+        """
+        t = norm(region_text)
+        out: dict[str, str] = {}
+        if not t:
+            return out
+        if not sigungu:
+            best = ""
+            for nm, cd in self.sgg_seen.items():
+                if norm(nm) and norm(nm) in t and len(nm) > len(best):
+                    best, out["sigungu"] = nm, cd
+            sigungu = out.get("sigungu", "")
+        if sigungu:
+            for (cd, nm), dcd in self.emd_seen.items():
+                if cd == sigungu and norm(nm) in t:
+                    out["dong"] = dcd
+                    break
+        return out
+
     def find_building(
         self,
         name: str,
@@ -197,6 +232,7 @@ class CourtAuction:
         min_fail: int = 2,
         months: int = 6,
         today: dt.date | None = None,
+        region_text: str = "",
     ) -> tuple[list[Item], dict]:
         """건물명으로 물건을 찾고 (결과, 학습된 지역코드)를 돌려준다.
 
@@ -221,6 +257,10 @@ class CourtAuction:
             if it.giil and it.giil < today.isoformat():
                 continue
             matched.append(it)
+
+        # 건물이 안 잡혔더라도 지역 이름으로 코드를 학습해 다음 조회를 좁힌다
+        if not hint:
+            hint = self.resolve_region(region_text, sigungu)
 
         matched.sort(key=lambda x: (x.giil, x.case_no))
         return matched, hint

@@ -38,6 +38,7 @@ def load_targets(n: no.Notion, db: str) -> list[dict]:
         out.append({
             "page_id": p["id"],
             "name": name.strip(),
+            "region_text": no.read(p, "지역") or "",
             "sido": sido,
             "sigungu": no.read(p, "시군구코드") or "",
             "dong": no.read(p, "읍면동코드") or "",
@@ -98,7 +99,8 @@ def main() -> int:
         try:
             items, hint = client.find_building(
                 t["name"], t["sido"], t["sigungu"], t["dong"],
-                min_fail=t["min_fail"], months=t["months"], today=TODAY)
+                min_fail=t["min_fail"], months=t["months"], today=TODAY,
+                region_text=t["region_text"])
         except Exception as e:                                   # noqa: BLE001
             print("  조회 실패:", e)
             n.update(t["page_id"], {"메모": no.txt(f"실패 {TODAY}: {e}")})
