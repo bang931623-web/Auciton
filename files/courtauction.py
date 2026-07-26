@@ -61,28 +61,6 @@ def _int(v) -> int:
         return 0
 
 
-PYEONG = 3.33          # 사용자 지정: ㎡ ÷ 3.33 = 평, 소수 첫째자리 반올림
-
-
-def fmt_area(text: str | None) -> str:
-    """'철근콘크리트구조 프리케스트콘크리트구조 142.8㎡' → '142.8㎡(42.9평)'
-
-    층별로 여러 개가 적힌 경우(다가구주택 등)는 합계로 표기한다.
-    """
-    t = (text or "").strip()
-    nums = re.findall(r"(\d+(?:\.\d+)?)\s*㎡", t)
-    if not nums:
-        return ""
-    if len(nums) == 1:
-        m2, label = nums[0], nums[0]
-    else:
-        total = sum(float(x) for x in nums)
-        m2 = f"{total:.2f}".rstrip("0").rstrip(".")
-        label = f"합계 {m2}"
-    pyeong = round(float(m2) / PYEONG, 1)
-    return f"{label}\u33a1({pyeong:g}평)"
-
-
 def _date(v) -> str:
     v = (str(v) or "").strip()
     return f"{v[:4]}-{v[4:6]}-{v[6:8]}" if len(v) == 8 and v.isdigit() else ""
@@ -128,7 +106,7 @@ def parse(r: dict) -> Item:
         giil=_date(r.get("maeGiil")),
         next_giil=_date(r.get("maegyuljGiil")),
         fail_count=_int(r.get("yuchalCnt")),
-        area=fmt_area(r.get("areaList")),
+        area=r.get("areaList", ""),
         raw=r,
     )
 
@@ -138,8 +116,6 @@ class CourtAuction:
         # 조회 중 마주친 지역명 → 코드 (시군구 코드를 스스로 학습하는 용도)
         self.sgg_seen: dict[str, str] = {}          # '용인시 기흥구' -> '463'
         self.emd_seen: dict[tuple[str, str], str] = {}   # ('463','청라동') -> '122'
-        # 물건키 -> '126.32㎡(37.9평)'  (면적은 물건검색·매각결과검색에만 들어있다)
-        self.area_seen: dict[str, str] = {}
         self.s = session or requests.Session()
         self.s.headers.update(HEADERS)
         # 세션 쿠키(JSESSIONID) 확보
@@ -274,10 +250,6 @@ class CourtAuction:
     # ------------------------------------------------------------------ #
 
     def _learn_region(self, r: dict) -> None:
-        key = f'{r.get("boCd","")}{r.get("saNo","")}-{r.get("maemulSer","")}'
-        area = fmt_area(r.get("areaList"))
-        if area and len(key) > 2:
-            self.area_seen[key] = area
         sgg_nm, sgg_cd = r.get("hjguSigu", ""), r.get("daepyoSiguCd", "")
         dong_nm, dong_cd = r.get("hjguDong", ""), r.get("daepyoDongCd", "")
         if sgg_nm and sgg_cd:
@@ -550,7 +522,7 @@ class CaseTracker:
                 giil=giil,
                 next_giil=_dxdy_date(nxt.get("dxdyTime")) if nxt else "",
                 fail_count=fail,
-                area=self.c.area_seen.get(f"{cd}{cs_num}-{seq}", ""),
+                area="",
                 raw={"ultmt": o.get("ultmtNm"), "prog": bas.get("csProgStatCd")},
             ))
         out.sort(key=lambda x: x.case_no)
