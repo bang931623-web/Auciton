@@ -6,14 +6,14 @@
 import sys, datetime as dt
 import courtauction as ca
 
-HDR = "사건번호 | 소재지 및 내역 | 면적 | 감정평가액 | 기일 | 최저매각가격 | 다음 기일 | 유찰"
+HDR = "사건번호 | 소재지 및 내역 | 감정평가액 | 기일 | 최저매각가격 | 다음 기일 | 유찰"
 
 def show(items, min_fail=0):
     print(HDR)
     for i in items:
         mark = "●" if i.fail_count >= min_fail else "○"
-        print(f"{mark} {i.case_no} | {i.building}{i.detail} | {i.area or '-'} | "
-              f"{i.appraisal:,} | {i.giil} | {i.min_price:,} | {i.next_giil} | {i.fail_count}")
+        print(f"{mark} {i.case_no} | {i.building}{i.detail} | {i.appraisal:,} | "
+              f"{i.giil} | {i.min_price:,} | {i.next_giil} | {i.fail_count}")
 
 if sys.argv[1] == "--case":
     tr = ca.CaseTracker()
