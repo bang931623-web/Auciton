@@ -389,7 +389,8 @@ class CourtAuction:
                     cases.add((r["boCd"], r["saNo"]))
                 if r.get("srchHjguSiguCd"):
                     hint = {"sigungu": (r.get("srchHjguSiguCd") or "")[2:],
-                            "dong": (r.get("srchHjguDongCd") or "")[5:]}
+                            "dong": (r.get("srchHjguDongCd") or "")[5:],
+                            "address": it.address}   # 공매 지번 매칭용
         if not hint:
             hint = self.resolve_region(region_text, sigungu)
         return cases, hint

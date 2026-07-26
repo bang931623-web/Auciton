@@ -6,16 +6,27 @@
 import sys, datetime as dt
 import courtauction as ca
 
-HDR = "사건번호 | 소재지 및 내역 | 면적 | 감정평가액 | 기일 | 최저매각가격 | 다음 기일 | 유찰"
+HDR = "사건번호 | 소재지 및 내역 | 면적 | 감정평가액 | 기일 | 최저매각가격 | 다음 기일 | 유찰 | 법원"
 
 def show(items, min_fail=0):
     print(HDR)
     for i in items:
         mark = "●" if i.fail_count >= min_fail else "○"
         print(f"{mark} {i.case_no} | {i.building}{i.detail} | {i.area or '-'} | "
-              f"{i.appraisal:,} | {i.giil} | {i.min_price:,} | {i.next_giil} | {i.fail_count}")
+              f"{i.appraisal:,} | {i.giil} | {i.min_price:,} | {i.next_giil} | "
+              f"{i.fail_count} | {i.court} {i.dept}")
 
-if sys.argv[1] == "--case":
+if sys.argv[1] == "--onbid":
+    import onbid as ob
+    o = ob.OnBid()
+    name = sys.argv[2]
+    jibun = sys.argv[3] if len(sys.argv) > 3 else ""
+    hits = o.find(name, jibun)
+    print(f"온비드 매각 물건 {len(o.fetch_all())}건 중 매칭 {len(hits)}건")
+    print("물건관리번호 | 소재지 및 내역 | 감정평가액 | 최저입찰가 | 입찰시작일")
+    for h in hits:
+        print(f"◆ {h.mng_no} | {h.title} | {h.appraisal:,} | {h.low_price:,} | {h.bid_start}")
+elif sys.argv[1] == "--case":
     tr = ca.CaseTracker()
     show(tr.track(sys.argv[2], sys.argv[3]))
 else:

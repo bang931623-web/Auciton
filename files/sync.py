@@ -23,8 +23,9 @@ import traceback
 
 import courtauction as ca
 import notion as no
+import onbid as ob
 
-VERSION = "2.1 (실패 시 삭제금지 + 조기중단)"
+VERSION = "3.1 (경매 표 / 공매 표 분리)"
 TODAY = dt.date.today()
 ON_SOLD = os.environ.get("ON_SOLD", "archive")
 ACTIVE = ("진행", "관찰중")
@@ -53,6 +54,7 @@ def load_targets(n: no.Notion, db: str) -> list[dict]:
             "min_fail": int(no.read(p, "최소유찰", 2) or 2),
             "months": int(no.read(p, "검색개월", 6) or 6),
             "court": (no.read(p, "법원") or "").strip(),
+            "jibun": (no.read(p, "지번") or "").strip(),
             "cases": [x.strip() for x in
                       re.split(r"[,\n/]+", no.read(p, "사건번호") or "") if x.strip()],
         })
@@ -102,6 +104,20 @@ def props(it: ca.Item, status: str, track_key: str) -> dict:
     return p
 
 
+def onbid_props(it: ob.OnbidItem) -> dict:
+    return {
+        "사건번호": no.title(it.mng_no),
+        "건물명": no.sel(it.building or None),
+        "소재지 및 내역": no.txt(it.title),
+        "감정평가액": no.num(it.appraisal or None),
+        "최저입찰가": no.num(it.low_price or None),
+        "입찰시작일": no.date(it.bid_start),
+        "상태": no.sel("진행"),
+        "물건키": no.txt(it.key),
+        "최근확인": no.date(TODAY.isoformat()),
+    }
+
+
 def human_case_no(cs_num: str) -> str:
     """내부 사건번호 20250130001506 → 2025타경1506"""
     return f"{cs_num[:4]}타경{int(cs_num[8:])}"
@@ -111,7 +127,11 @@ def human_case_no(cs_num: str) -> str:
 def main() -> int:
     print(f"=== 경매 동기화 버전 {VERSION} / {TODAY} ===")
     n = no.Notion()
-    cfg_db, res_db = os.environ["CONFIG_DB_ID"], os.environ["RESULT_DB_ID"]
+    cfg_db = os.environ["CONFIG_DB_ID"]
+    res_db = os.environ["RESULT_DB_ID"]                    # 경매 표
+    onbid_db = n.find_db_by_property(no.ONBID_MARK)        # 공매 표
+    if not onbid_db:
+        print("!! 공매 표를 찾을 수 없습니다. 0단계 워크플로를 먼저 실행하세요.")
 
     targets = load_targets(n, cfg_db)
     if not targets:
@@ -180,6 +200,13 @@ def main() -> int:
             patch["시군구코드"] = no.txt(hint["sigungu"])
         if hint.get("dong") and not t["dong"]:
             patch["읍면동코드"] = no.txt(hint["dong"])
+        # 공매 매칭에 쓸 지번을 경매 소재지에서 자동 학습
+        if not t["jibun"] and hint.get("address"):
+            jb = ob.extract_jibun(hint["address"])
+            if jb:
+                patch["지번"] = no.txt(jb)
+                t["jibun"] = jb
+                print(f"  지번 학습: {jb}")
         n.update(t["page_id"], patch)
 
     # ---------------- 2. 추적 ----------------
@@ -219,12 +246,45 @@ def main() -> int:
             else:
                 watch += 1
 
+    # ---------------- 2-2. 공매 (온비드) ----------------
+    onbid_existing, onbid_active, onbid_alive = {}, set(), set()
+    onbid_add = onbid_upd = 0
+    onbid = ob.OnBid()
+    try:
+        if not onbid_db:
+            raise ob.OnbidDown("공매 표 없음")
+        onbid_existing, onbid_active = load_existing(n, onbid_db)
+        onbid.healthcheck()
+        pool = onbid.fetch_all(months=max(t["months"] for t in targets), today=TODAY)
+        print(f"\n온비드 부동산 매각 물건 {len(pool)}건 수집 (요청 {onbid.req_count}회)")
+        for t in targets:
+            hits = onbid.find(t["name"], t["jibun"], t["region_text"], today=TODAY)
+            if not hits:
+                continue
+            print(f"  [{t['name']}] 공매 {len(hits)}건")
+            for it in hits:
+                onbid_alive.add(it.key)
+                body = onbid_props(it)
+                if it.key in onbid_existing:
+                    n.update(onbid_existing[it.key]["id"], body)
+                    onbid_upd += 1
+                else:
+                    body["최초등록"] = no.date(TODAY.isoformat())
+                    n.create(onbid_db, body)
+                    onbid_add += 1
+                print(f"  ◆ {it.mng_no} {it.title[:40]} 최저 {it.low_price:,}원 "
+                      f"입찰 {it.bid_start}")
+    except ob.OnbidDown as e:
+        failures += 1
+        print(f"  공매 조회 실패: {e}")
+
     # ---------------- 3. 종료 처리 ----------------
     # 조회 실패가 하나라도 있었다면 "사라졌다"고 단정할 수 없다. 절대 삭제하지 않는다.
     if failures:
         print(f"\n조회 실패 {failures}건 — 종료 처리를 건너뜁니다 "
               f"(요청 {client.req_count}회)")
-        print(f"완료 — 신규 {added} / 갱신 {updated} / 관찰중 {watch} / 종료 보류")
+        print(f"[경매] 신규 {added} / 갱신 {updated} / 관찰중 {watch}")
+        print(f"[공매] 신규 {onbid_add} / 갱신 {onbid_upd}")
         return 0
 
     gone = [k for k in active if k not in alive]
@@ -235,8 +295,17 @@ def main() -> int:
         if ON_SOLD == "archive":
             n.archive(page["id"])
 
-    print(f"\n완료 — 신규 {added} / 갱신 {updated} / 관찰중 {watch} / "
-          f"종료 {len(gone)} (요청 {client.req_count}회)")
+    gone_ob = [k for k in onbid_active if k not in onbid_alive]
+    for k in gone_ob:
+        page = onbid_existing[k]
+        n.update(page["id"], {"상태": no.sel("종료(마감/취소)"),
+                              "최근확인": no.date(TODAY.isoformat())})
+        if ON_SOLD == "archive":
+            n.archive(page["id"])
+
+    print(f"\n[경매] 신규 {added} / 갱신 {updated} / 관찰중 {watch} / 종료 {len(gone)}")
+    print(f"[공매] 신규 {onbid_add} / 갱신 {onbid_upd} / 종료 {len(gone_ob)}")
+    print(f"요청 — 법원 {client.req_count}회 / 온비드 {onbid.req_count}회")
     return 0
 
 

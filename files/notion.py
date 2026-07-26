@@ -62,6 +62,31 @@ class Notion:
         """Notion API에는 완전삭제가 없다. archived=True 는 휴지통 이동."""
         return self._req("PATCH", f"/pages/{page_id}", json={"archived": True})
 
+    def find_db(self, title: str) -> str | None:
+        """제목으로 데이터베이스를 찾는다. 시크릿을 추가하지 않아도 되게 해준다."""
+        d = self._req("POST", "/search", json={
+            "query": title,
+            "filter": {"value": "database", "property": "object"},
+        })
+        for r in d.get("results", []):
+            t = "".join(x["plain_text"] for x in r.get("title", []))
+            if t.strip() == title:
+                return r["id"]
+        return None
+
+    def find_db_by_property(self, prop: str) -> str | None:
+        """특정 칸을 가진 DB를 찾는다. 사용자가 표 제목을 바꿔도 계속 동작한다."""
+        d = self._req("POST", "/search",
+                      json={"filter": {"value": "database", "property": "object"}})
+        for r in d.get("results", []):
+            if prop in (r.get("properties") or {}):
+                return r["id"]
+        return None
+
+    def db_parent_page(self, db_id: str) -> str | None:
+        d = self._req("GET", f"/databases/{db_id}")
+        return (d.get("parent") or {}).get("page_id")
+
     def create_db(self, parent_page_id: str, title: str, schema: dict) -> str:
         d = self._req("POST", "/databases", json={
             "parent": {"type": "page_id", "page_id": parent_page_id},
@@ -78,6 +103,27 @@ def txt(v: str | None) -> dict:
 
 def title(v: str | None) -> dict:
     return {"title": [{"type": "text", "text": {"content": (v or "")[:1900]}}]}
+
+
+def runs(parts: list[tuple[str, dict]]) -> dict:
+    """여러 서식 조각으로 rich_text를 만든다.
+
+        runs([("인천지방법원 부천지원", {}), ("  경매2계", {"color": "gray"})])
+
+    annotations 로 bold / italic / underline / strikethrough / code / color 지정 가능.
+    color: gray, brown, orange, yellow, green, blue, purple, pink, red
+           (뒤에 _background 를 붙이면 형광펜)
+    숫자·날짜 속성에는 서식을 넣을 수 없다. rich_text와 title 에만 가능하다.
+    """
+    out = []
+    for text, ann in parts:
+        if not text:
+            continue
+        item: dict = {"type": "text", "text": {"content": text[:1900]}}
+        if ann:
+            item["annotations"] = ann
+        out.append(item)
+    return {"rich_text": out}
 
 
 def num(v: int | float | None) -> dict:
@@ -122,6 +168,7 @@ CONFIG_SCHEMA: dict[str, Any] = {
     "최소유찰": {"number": {"format": "number"}},
     "활성": {"checkbox": {}},
     "검색개월": {"number": {"format": "number"}},
+    "지번": {"rich_text": {}},           # 공매 매칭용. 경매 조회에서 자동 학습
     "사건번호": {"rich_text": {}},       # 직접 추적할 사건번호 (쉼표로 여러 개)
     "법원": {"rich_text": {}},           # 사건번호를 적었을 때만 필요
     "시도코드": {"rich_text": {}},       # 아래 3개는 프로그램이 자동으로 채움
@@ -151,6 +198,28 @@ RESULT_SCHEMA: dict[str, Any] = {
     ]}},
     "물건키": {"rich_text": {}},
     "추적키": {"rich_text": {}},
+    "최초등록": {"date": {}},
+    "최근확인": {"date": {}},
+}
+
+
+# ----------------------------------------------------------- 공매 결과 DB (별도)
+ONBID_TITLE = "공매 물건"
+ONBID_MARK = "입찰시작일"      # 이 칸이 있는 DB를 공매 표로 인식한다 (제목을 바꿔도 안전)
+
+ONBID_SCHEMA: dict[str, Any] = {
+    "사건번호": {"title": {}},          # 온비드 물건관리번호
+    "건물명": {"select": {}},
+    "소재지 및 내역": {"rich_text": {}},
+    "감정평가액": {"number": {"format": "won"}},
+    "최저입찰가": {"number": {"format": "won"}},
+    "입찰시작일": {"date": {}},
+    # 아래는 프로그램 관리용. 뷰에서 숨기면 된다
+    "상태": {"select": {"options": [
+        {"name": "진행", "color": "green"},
+        {"name": "종료(마감/취소)", "color": "gray"},
+    ]}},
+    "물건키": {"rich_text": {}},
     "최초등록": {"date": {}},
     "최근확인": {"date": {}},
 }
