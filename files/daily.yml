@@ -1,0 +1,23 @@
+name: 2단계 - 경매물건 동기화 (매일 자동)
+
+on:
+  schedule:
+    - cron: "0 5 * * *"     # UTC 05:00 = KST 14:00
+  workflow_dispatch:         # 필요할 때 수동 실행 버튼
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install requests
+      - run: python sync.py
+        env:
+          TZ: Asia/Seoul
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          CONFIG_DB_ID: ${{ secrets.CONFIG_DB_ID }}
+          RESULT_DB_ID: ${{ secrets.RESULT_DB_ID }}
+          ON_SOLD: archive
