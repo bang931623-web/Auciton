@@ -712,29 +712,55 @@ function sourceHTML(r, tab){
 }
 
 /* ------------------------------------------------------------------ 최근 실거래
-   지식산업센터114 + 산업부동산에서 건물별로 긁어 온 최근 5건. 건물명으로 붙인다.
-   두 사이트가 적는 평단가는 '공급면적' 기준이라 보드의 평당 최저가(전용 기준)와
-   그대로 비교하면 안 된다. 그래서 전용 기준을 크게, 공급 기준을 작게 같이 보여 준다. */
+   지식산업센터114 + 산업부동산에서 건물별로 긁어 온 거래(건물당 최대 30건).
+   평당은 전용면적 기준으로만 보여 준다 — 보드의 평당 최저가와 같은 잣대라야 비교가 된다.
+   (두 사이트가 화면에 적는 평단가는 공급면적 기준이라 값이 절반쯤으로 보인다.)
+
+   법원이 쓰는 건물명과 노션 감시 건물명이 달라서('가산한화비즈메트로2차' vs
+   '가산한화비즈메트로', '해오름' vs '성강해오름파크타워') 이름을 느슨하게 맞춘다. */
+const MIN_GAP_PY = 20;            // 물건보다 이만큼 이상 작은 거래는 뺀다(큰 쪽은 그대로 둔다)
+
 function dealsFor(r){
   const map = STATE.data?.deals;
   if(!map) return null;
-  const name = String(r["건물명"] || "").trim();
-  return name && Array.isArray(map[name]) ? map[name] : null;
+  const want = String(r["건물명"] || "").trim();
+  if(!want) return null;
+  if(map[want]) return map[want];
+  const w = want.replace(/\s/g, "");
+  let hit = null, many = false;
+  for(const k of Object.keys(map)){
+    const kk = k.replace(/\s/g, "");
+    if(!kk || kk.length < 3) continue;
+    if(kk === w || kk.includes(w) || w.includes(kk)){
+      if(hit && hit !== k) many = true;
+      hit = hit && hit.length >= k.length ? hit : k;
+    }
+  }
+  return (hit && !many) ? map[hit] : (hit ? map[hit] : null);
 }
 
 function dealsHTML(r){
-  const list = dealsFor(r);
-  if(!list) return "";
+  const all = dealsFor(r);
+  if(!all) return "";
   const name = esc(String(r["건물명"] || "").trim());
+  const mine = areaM2(r);                       // 이 물건의 전용면적(㎡)
+  const floor = mine ? mine - MIN_GAP_PY * PYEONG : null;
+  const kept = floor ? all.filter(d => !d["면적"] || d["면적"] >= floor) : all;
+  const list = kept.slice(0, 5);
+  const cut = all.length - kept.length;
+  const note = !mine ? "이 물건 면적을 몰라 거르지 않고 전부 표시"
+    : cut ? `이 물건 ${(mine/PYEONG).toFixed(1)}평 기준 · ${MIN_GAP_PY}평 이상 작은 거래 ${cut}건 제외`
+          : `이 물건 ${(mine/PYEONG).toFixed(1)}평 기준 · 거른 거래 없음`;
+
   if(!list.length){
     return `<div class="deals"><div class="dh"><b>최근 실거래</b></div>
-      <div class="none">${name} 은(는) 지식산업센터114·산업부동산 어느 쪽에도 거래가 없습니다.</div></div>`;
+      <div class="none">${all.length
+        ? `${name} 거래 ${all.length}건이 모두 이 물건보다 ${MIN_GAP_PY}평 이상 작아 가렸습니다.`
+        : `${name} 은(는) 지식산업센터114·산업부동산 어느 쪽에도 거래가 없습니다.`}</div></div>`;
   }
   const rows = list.map(d => {
     const area = d["면적"] ? `${Number(d["면적"]).toFixed(2)}㎡<small>${(d["면적"]/PYEONG).toFixed(1)}평</small>` : `<span class="dash">—</span>`;
-    const py = d["평당전용"]
-      ? `${won(d["평당전용"])}${d["평당"] ? `<small>공급 ${won(d["평당"])}</small>` : ""}`
-      : (d["평당"] ? `${won(d["평당"])}<small>공급 기준</small>` : `<span class="dash">—</span>`);
+    const py = d["평당전용"] ? won(d["평당전용"]) : `<span class="dash">—</span>`;
     return `<tr>
       <td class="mono">${esc(fmtDate(d["일자"]) || d["일자"] || "")}</td>
       <td>${d["층"] ? esc(d["층"]) + "층" : `<span class="dash">—</span>`}</td>
@@ -746,12 +772,13 @@ function dealsHTML(r){
   }).join("");
   return `<div class="deals">
     <div class="dh"><b>최근 실거래 ${list.length}건</b>
-      <small>${name} · 지식산업센터114 + 산업부동산 · 평당은 전용면적 기준(작은 글씨가 두 사이트 표기인 공급면적 기준)</small></div>
+      <small>${name} · 지식산업센터114 + 산업부동산 · 평당은 전용면적 기준<br>${note}</small></div>
     <table class="dealt">
       <thead><tr><th>거래일</th><th>층</th><th class="r">전용면적</th><th class="r">매매가</th><th class="r">평당</th><th></th></tr></thead>
       <tbody>${rows}</tbody>
     </table></div>`;
 }
+
 
 const DETAIL_KEYS = {
   auction: ["법원","면적","다음 기일","최초등록","최근확인"],
