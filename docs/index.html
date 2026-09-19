@@ -238,6 +238,19 @@ tr.detail td{background:var(--surface-2);border-bottom:1px solid var(--line);pad
   text-decoration:none;white-space:nowrap}
 .srcbtn:hover{background:var(--accent-soft);border-color:var(--accent)}
 .det .f.wide{grid-column:span 2}
+.deals{margin:14px 12px 4px;border-top:1px solid var(--line);padding-top:12px}
+.deals .dh{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;margin-bottom:8px}
+.deals .dh b{font-size:12px;letter-spacing:.02em}
+.deals .dh small{font-size:11px;color:var(--muted)}
+table.dealt{width:100%;border-collapse:collapse;font-size:12.5px}
+table.dealt th{text-align:left;font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;
+  color:var(--muted);font-weight:600;padding:0 8px 5px 0;white-space:nowrap}
+table.dealt td{padding:5px 8px 5px 0;border-top:1px solid var(--line);vertical-align:top}
+table.dealt td.r,table.dealt th.r{text-align:right;padding-right:14px}
+table.dealt small{display:block;font-size:10.5px;color:var(--muted);font-weight:400}
+.srcpill{display:inline-block;font-size:10px;padding:1px 5px;border-radius:4px;
+  background:var(--surface-2);border:1px solid var(--line);color:var(--muted);margin-left:6px}
+.deals .none{font-size:12px;color:var(--muted)}
 .srchint{margin-top:5px;font-size:11px;color:var(--muted);word-break:keep-all;line-height:1.45}
 
 .empty{padding:44px 20px;text-align:center;color:var(--muted)}
@@ -306,6 +319,20 @@ pre{margin:0;overflow-x:auto;background:var(--surface-2);border:1px solid var(--
   .det{grid-template-columns:repeat(auto-fill,minmax(140px,1fr));padding:12px 14px 14px}
   .brand h1{font-size:15px}
   .brand .sub{display:none}
+
+  /* 실거래 표는 좁은 화면에서도 표로 둔다 — 한 줄씩 쌓으면 읽을 수가 없다 */
+  table.dealt,table.dealt thead,table.dealt tbody,table.dealt tr,table.dealt th,table.dealt td{
+    display:revert;width:auto}
+  table.dealt{display:table;width:100%;font-size:11.5px}
+  table.dealt thead{display:table-header-group}
+  table.dealt tr{display:table-row}
+  table.dealt th,table.dealt td{display:table-cell;border-top:1px solid var(--line);padding:5px 6px 5px 0}
+  table.dealt th{border-top:0;font-size:9.5px;letter-spacing:.03em}
+  table.dealt td.r,table.dealt th.r{padding-right:0}
+  table.dealt small{font-size:9.5px}
+  table.dealt th:last-child,table.dealt td:last-child{display:none}   /* 출처 칸은 숨긴다 */
+  .deals{margin:12px 14px 4px}
+  .deals .dh small{font-size:10.5px}
 }
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 </style>
@@ -684,6 +711,48 @@ function sourceHTML(r, tab){
     `</div></div>`;
 }
 
+/* ------------------------------------------------------------------ 최근 실거래
+   지식산업센터114 + 산업부동산에서 건물별로 긁어 온 최근 5건. 건물명으로 붙인다.
+   두 사이트가 적는 평단가는 '공급면적' 기준이라 보드의 평당 최저가(전용 기준)와
+   그대로 비교하면 안 된다. 그래서 전용 기준을 크게, 공급 기준을 작게 같이 보여 준다. */
+function dealsFor(r){
+  const map = STATE.data?.deals;
+  if(!map) return null;
+  const name = String(r["건물명"] || "").trim();
+  return name && Array.isArray(map[name]) ? map[name] : null;
+}
+
+function dealsHTML(r){
+  const list = dealsFor(r);
+  if(!list) return "";
+  const name = esc(String(r["건물명"] || "").trim());
+  if(!list.length){
+    return `<div class="deals"><div class="dh"><b>최근 실거래</b></div>
+      <div class="none">${name} 은(는) 지식산업센터114·산업부동산 어느 쪽에도 거래가 없습니다.</div></div>`;
+  }
+  const rows = list.map(d => {
+    const area = d["면적"] ? `${Number(d["면적"]).toFixed(2)}㎡<small>${(d["면적"]/PYEONG).toFixed(1)}평</small>` : `<span class="dash">—</span>`;
+    const py = d["평당전용"]
+      ? `${won(d["평당전용"])}${d["평당"] ? `<small>공급 ${won(d["평당"])}</small>` : ""}`
+      : (d["평당"] ? `${won(d["평당"])}<small>공급 기준</small>` : `<span class="dash">—</span>`);
+    return `<tr>
+      <td class="mono">${esc(fmtDate(d["일자"]) || d["일자"] || "")}</td>
+      <td>${d["층"] ? esc(d["층"]) + "층" : `<span class="dash">—</span>`}</td>
+      <td class="r num">${area}</td>
+      <td class="r num">${d["가격"] ? won(d["가격"]) + `<small>${Number(d["가격"]).toLocaleString()}원</small>` : `<span class="dash">—</span>`}</td>
+      <td class="r num">${py}</td>
+      <td><span class="srcpill">${esc(d["출처"] || "")}</span></td>
+    </tr>`;
+  }).join("");
+  return `<div class="deals">
+    <div class="dh"><b>최근 실거래 ${list.length}건</b>
+      <small>${name} · 지식산업센터114 + 산업부동산 · 평당은 전용면적 기준(작은 글씨가 두 사이트 표기인 공급면적 기준)</small></div>
+    <table class="dealt">
+      <thead><tr><th>거래일</th><th>층</th><th class="r">전용면적</th><th class="r">매매가</th><th class="r">평당</th><th></th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>`;
+}
+
 const DETAIL_KEYS = {
   auction: ["법원","면적","다음 기일","최초등록","최근확인"],
   onbid:   ["최초등록","최근확인"],
@@ -795,8 +864,9 @@ function renderTable(){
       if(["다음 기일","최초등록","최근확인","최근실행"].includes(k)) v = fmtDate(v);
       return `<div class="f"><div class="k">${esc(k)}</div><div class="v ${/키$/.test(k) ? "mono" : ""}">${esc(v || "—")}</div></div>`;
     }).join("") + sourceHTML(r, tab);
+    const deal = dealsHTML(r);
     return `<tr class="row ${open ? "open" : ""}" data-id="${esc(id)}">${tds}</tr>` +
-      (open ? `<tr class="detail"><td colspan="${cols.length}"><div class="det">${det}</div></td></tr>` : "");
+      (open ? `<tr class="detail"><td colspan="${cols.length}"><div class="det">${det}</div>${deal}</td></tr>` : "");
   }).join("");
 }
 
@@ -835,6 +905,7 @@ function setData(d, label, isSample){
     auction: Array.isArray(d.auction) ? d.auction : [],
     onbid:   Array.isArray(d.onbid) ? d.onbid : [],
     watch:   Array.isArray(d.watch) ? d.watch : [],
+    deals:   (d.deals && typeof d.deals === "object") ? d.deals : null,
     generated_at: d.generated_at || null
   };
   STATE.isSample = !!isSample;
