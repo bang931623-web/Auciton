@@ -594,11 +594,6 @@ function moneyHTML(v, sub){
   return `<span class="money num">${s}<small class="full">${foot}</small></span>`;
 }
 
-/** 값 밑에 '14.5평 · 47.88㎡' 을 붙인다 — 얼마짜리가 몇 평인지 바로 보이게. */
-function moneyAreaHTML(v, r){
-  const a = areaM2(r);
-  return moneyHTML(v, a ? `${(a/PYEONG).toFixed(1)}평 · ${a.toFixed(2)}㎡` : null);
-}
 function gaugeHTML(v){
   const r = rate(v);
   if(r === null) return `<span class="dash">—</span>`;
@@ -628,6 +623,12 @@ function perPyeong(r, tab){
   const p = pyeong(r), v = Number(r[key]);
   return (p && v > 0) ? v / p : null;
 }
+/** 평수 컬럼 — 평을 크게, ㎡를 작게. 전용면적 기준. */
+function areaHTML(r){
+  const a = areaM2(r);
+  if(!a) return `<span class="dash">—</span>`;
+  return `<span class="money num">${(a/PYEONG).toFixed(1)}평<small class="full">${a.toFixed(2)}㎡</small></span>`;
+}
 function perPyeongHTML(r){
   const v = perPyeong(r);
   if(!v) return `<span class="dash">—</span>`;
@@ -654,7 +655,8 @@ const COLS = {
       return `<div class="b">${b || esc(t)}</div>${b ? `<div class="d">${esc(rest)}</div>` : ""}`;
     }},
     {k:"기일", sortable:true, cell:r => ddayHTML(r["기일"])},
-    {k:"최저매각가격", cls:"r", sortable:true, cell:r => moneyAreaHTML(r["최저매각가격"], r)},
+    {k:"최저매각가격", cls:"r", sortable:true, cell:r => moneyHTML(r["최저매각가격"])},
+    {k:"평수", cls:"r", sortable:true, cell:r => areaHTML(r)},
     {k:"평당 최저가", cls:"r", sortable:true, cell:r => perPyeongHTML(r)},
     {k:"감정평가액", cls:"r", sortable:true, cell:r => moneyHTML(r["감정평가액"])},
     {k:"최저가율", sortable:true, cell:r => gaugeHTML(r["최저가율"])},
@@ -670,7 +672,8 @@ const COLS = {
     {k:"소재지 및 내역", cls:"addr span", sortable:true, cell:r =>
       `<div class="b">${esc(r["건물명"] || "")}</div><div class="d">${esc(r["소재지 및 내역"] || "")}</div>`},
     {k:"입찰시작일", sortable:true, cell:r => ddayHTML(r["입찰시작일"])},
-    {k:"최저입찰가", cls:"r", sortable:true, cell:r => moneyAreaHTML(r["최저입찰가"], r)},
+    {k:"최저입찰가", cls:"r", sortable:true, cell:r => moneyHTML(r["최저입찰가"])},
+    {k:"평수", cls:"r", sortable:true, cell:r => areaHTML(r)},
     {k:"평당 최저가", cls:"r", sortable:true, cell:r => perPyeongHTML(r)},
     {k:"감정평가액", cls:"r", sortable:true, cell:r => moneyHTML(r["감정평가액"])},
     {k:"최저가율", sortable:true, cell:r => {
@@ -720,6 +723,21 @@ function rowKey(r){
 }
 
 /** 같은 사건이면 합친 한 줄로, 아니면 그대로. auction 탭에서만 묶는다. */
+/** '제11층 제1103호', '8층807호', '지하1층' 에서 층수를 뽑는다. 못 찾으면 null. */
+function floorOf(r){
+  const s = String(r["소재지 및 내역"] || "");
+  const m = s.match(/(지하\s*)?제?\s*(\d+)\s*층/);
+  if(!m) return null;
+  const n = Number(m[2]);
+  return m[1] ? -n : n;
+}
+
+/** 층이 서로 다르면 묶지 않는다 — 같은 사건이라도 층이 다르면 별개 물건으로 본다. */
+function sameFloor(items){
+  const f = items.map(floorOf).filter(v => v !== null);
+  return new Set(f).size <= 1;
+}
+
 function grouped(list, tab){
   if(tab !== "auction") return list;
   const buckets = new Map();
@@ -730,7 +748,7 @@ function grouped(list, tab){
   }
   const out = [];
   for(const [k, items] of buckets){
-    if(items.length < 2){ out.push(items[0]); continue; }
+    if(items.length < 2 || !sameFloor(items)){ out.push(...items); continue; }
     items.sort((a, b) => String(a["사건번호"]).localeCompare(String(b["사건번호"]), "ko"));
     const sum = key => items.reduce((t, r) => t + (Number(r[key]) || 0), 0);
     const area = items.reduce((t, r) => t + (areaM2(r) || 0), 0);
@@ -941,6 +959,7 @@ function sorted(list){
     let x = a[k], y = b[k];
     if(k === "활성"){ x = a["활성"] ? 1 : 0; y = b["활성"] ? 1 : 0; }
     else if(k === "평당 최저가"){ x = perPyeong(a) ?? Infinity; y = perPyeong(b) ?? Infinity; }
+    else if(k === "평수"){ x = areaM2(a) ?? Infinity; y = areaM2(b) ?? Infinity; }
     else if(numeric.includes(k)){ x = Number(x || 0); y = Number(y || 0); }
     else if(dates.includes(k)){ x = parseDate(x)?.getTime() ?? Infinity; y = parseDate(y)?.getTime() ?? Infinity; }
     else { x = String(x ?? ""); y = String(y ?? ""); return x.localeCompare(y, "ko") * d; }
