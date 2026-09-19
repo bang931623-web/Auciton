@@ -237,6 +237,7 @@ tr.detail td{background:var(--surface-2);border-bottom:1px solid var(--line);pad
   border-radius:6px;background:var(--surface);color:var(--accent-ink);font-size:12px;font-weight:600;
   text-decoration:none;white-space:nowrap}
 .srcbtn:hover{background:var(--accent-soft);border-color:var(--accent)}
+.det .f.wide{grid-column:span 2}
 .srchint{margin-top:5px;font-size:11px;color:var(--muted);word-break:keep-all;line-height:1.45}
 
 .empty{padding:44px 20px;text-align:center;color:var(--muted)}
@@ -668,16 +669,23 @@ function sourceHTML(r, tab){
   if(!site) return "";
   // "2025타경1532 (2)" 의 (2) 는 보드가 붙인 물건번호라 검색창에서는 빼야 한다
   const no = String(r["사건번호"] || "").replace(/\s*\(\d+\)\s*$/, "").trim();
-  return `<div class="f"><div class="k">원본보기</div><div class="v">` +
+  const court = String(r["법원"] || "").trim();
+  const steps = tab === "auction"
+    ? (court ? `법원 <b>${esc(court)}</b> 선택 → 사건번호 <b>${esc(no)}</b> 붙여넣기`
+             : `사건번호 <b>${esc(no)}</b> 붙여넣기`)
+    : `물건관리번호 <b>${esc(no)}</b> 붙여넣기`;
+  return `<div class="f wide"><div class="k">원본보기</div><div class="v">` +
     `<a class="srcbtn" href="${site.url}" target="_blank" rel="noopener"` +
     ` data-copy="${esc(no)}" title="${esc(site.name)} 검색 화면이 새 탭에서 열립니다. 사건번호는 클립보드에 복사됩니다.">` +
     `${esc(site.name)} ↗</a>` +
-    (no ? `<div class="srchint">누르면 <b>${esc(no)}</b> 복사 → 검색창에 붙여넣기</div>` : "") +
+    (no ? `<div class="srchint">${steps}<br>${tab === "auction"
+        ? "지원 물건은 본원을 고르면 0건으로 나옵니다 — 법원 이름을 그대로 맞춰 주세요."
+        : ""}</div>` : "") +
     `</div></div>`;
 }
 
 const DETAIL_KEYS = {
-  auction: ["법원","면적","전유면적","다음 기일","최초등록","최근확인"],
+  auction: ["법원","면적","다음 기일","최초등록","최근확인"],
   onbid:   ["최초등록","최근확인"],
   watch:   ["지번","사건번호","법원","최근실행","메모"]
 };
