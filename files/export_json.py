@@ -116,7 +116,7 @@ def main() -> int:
     if dl:
         print("실거래 수집 중…")
         try:
-            data["deals"] = dl.collect(data["watch"], 5)
+            data["deals"] = dl.collect(data["watch"], 30)
         except Exception as e:
             print(f"!! 실거래 수집 실패: {e}")
             data["deals"] = {}

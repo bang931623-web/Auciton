@@ -163,15 +163,23 @@ def _daara_code(name: str, region: str, jibun: str, cookie: str):
     return None
 
 
-def from_daara(name: str, region: str, jibun: str, cookie: str) -> list[dict]:
+def from_daara(name: str, region: str, jibun: str, cookie: str,
+               pages: int = 6) -> list[dict]:
+    """한 쪽에 5건씩 나온다. 보드가 면적으로 걸러 쓰므로 넉넉히 받아 둔다."""
     code = _daara_code(name, region, jibun, cookie)
     if not code:
         return []
-    url = f"{DAARA}/include/getRealSellList.php?kn_code={code}&spc=&page=1&listtype=all"
-    try:
-        html = _get(url, cookie)
-    except Exception:
-        return []
+    html = ""
+    for pg in range(1, pages + 1):
+        url = f"{DAARA}/include/getRealSellList.php?kn_code={code}&spc=&page={pg}&listtype=all"
+        try:
+            part = _get(url, cookie)
+        except Exception:
+            break
+        if "<tr" not in part:
+            break
+        html += part
+        time.sleep(0.25)
     out = []
     for tr in _TR.findall(html):
         c = [_text(x) for x in _TD.findall(tr)]
@@ -234,7 +242,7 @@ def _key(d):
     return (d.get("일자"), d.get("가격"), round(a) if a else None)
 
 
-def recent(name: str, region: str = "", jibun: str = "", n: int = 5,
+def recent(name: str, region: str = "", jibun: str = "", n: int = 30,
            cookie: str | None = None) -> list[dict]:
     """두 사이트를 합쳐 최신순 n건."""
     if cookie is None:
@@ -276,8 +284,10 @@ def recent(name: str, region: str = "", jibun: str = "", n: int = 5,
     return merged
 
 
-def collect(watch: list[dict], n: int = 5) -> dict:
-    """감시 부동산 목록 -> {건물명: [거래 …]}"""
+def collect(watch: list[dict], n: int = 30) -> dict:
+    """감시 부동산 목록 -> {건물명: [거래 …]}
+
+    보드가 물건 전용면적에 맞춰 걸러 쓰기 때문에 건물당 넉넉히(기본 30건) 담는다."""
     try:
         cookie = _daara_session()
     except Exception as e:
