@@ -29,6 +29,12 @@ import sys
 
 import notion as no
 
+try:
+    import deals as dl
+except Exception as _e:                      # deals.py 가 없거나 깨져도 나머지는 나가야 한다
+    dl = None
+    print(f"!! deals.py 를 못 불러왔습니다 ({_e}). 실거래는 비어서 나갑니다.")
+
 AUCTION_KEYS = [
     "사건번호", "소재지 및 내역", "감정평가액", "기일", "최저매각가격",
     "다음 기일", "최저가율", "유찰", "건물명", "법원", "면적", "상태",
@@ -106,6 +112,17 @@ def main() -> int:
         "watch": dump(n, cfg, WATCH_KEYS),
     }
 
+    # 감시 건물별 최근 실거래 5건 (지식산업센터114 + 산업부동산)
+    if dl:
+        print("실거래 수집 중…")
+        try:
+            data["deals"] = dl.collect(data["watch"], 5)
+        except Exception as e:
+            print(f"!! 실거래 수집 실패: {e}")
+            data["deals"] = {}
+    else:
+        data["deals"] = {}
+
     known = sum(1 for r in data["auction"] if r.get("전유면적"))
 
     folder = os.path.dirname(path)
@@ -118,6 +135,8 @@ def main() -> int:
           f"공매 {len(data['onbid'])} / 감시 {len(data['watch'])}")
     print(f"전유면적을 읽어낸 물건 {known} / {len(data['auction'])}건 "
           f"(나머지는 공고 전이라 법원이 면적을 안 준 물건)")
+    got = sum(1 for v in data["deals"].values() if v)
+    print(f"실거래를 찾은 건물 {got} / {len(data['deals'])}곳")
     return 0
 
 
