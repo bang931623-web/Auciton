@@ -238,6 +238,18 @@ tr.detail td{background:var(--surface-2);border-bottom:1px solid var(--line);pad
   text-decoration:none;white-space:nowrap}
 .srcbtn:hover{background:var(--accent-soft);border-color:var(--accent)}
 .det .f.wide{grid-column:span 2}
+.gbadge{display:inline-block;margin-left:7px;font-size:10.5px;font-weight:600;padding:1px 6px;
+  border-radius:4px;background:var(--accent-soft);color:var(--accent-ink);vertical-align:1px}
+.memo{margin:14px 12px 0}
+.memo label{display:flex;align-items:baseline;gap:8px;font-size:10.5px;letter-spacing:.06em;
+  text-transform:uppercase;color:var(--muted);font-weight:600;margin-bottom:5px}
+.memo .memohint{font-size:10.5px;letter-spacing:0;text-transform:none;font-weight:400;color:var(--muted)}
+.memo .memohint.bad{color:var(--accent)}
+.memo textarea{width:100%;box-sizing:border-box;resize:vertical;min-height:46px;padding:8px 10px;
+  border:1px solid var(--line);border-radius:7px;background:var(--surface);color:var(--ink);
+  font:inherit;font-size:13px;line-height:1.5}
+.memo textarea:focus{outline:none;border-color:var(--line-strong);background:var(--surface-2)}
+.members .dh small{color:var(--muted)}
 .deals{margin:14px 12px 4px;border-top:1px solid var(--line);padding-top:12px}
 .deals .dh{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;margin-bottom:8px}
 .deals .dh b{font-size:12px;letter-spacing:.02em}
@@ -330,7 +342,8 @@ pre{margin:0;overflow-x:auto;background:var(--surface-2);border:1px solid var(--
   table.dealt th{border-top:0;font-size:9.5px;letter-spacing:.03em}
   table.dealt td.r,table.dealt th.r{padding-right:0}
   table.dealt small{font-size:9.5px}
-  table.dealt th:last-child,table.dealt td:last-child{display:none}   /* 출처 칸은 숨긴다 */
+  .deals:not(.members) table.dealt th:last-child,
+  .deals:not(.members) table.dealt td:last-child{display:none}   /* 출처 칸만 숨긴다 */
   .deals{margin:12px 14px 4px}
   .deals .dh small{font-size:10.5px}
 }
@@ -525,7 +538,8 @@ const STATE = {
   when: "all",
   status: new Set(),
   sort: {auction:{k:"기일",d:1}, onbid:{k:"입찰시작일",d:1}, watch:{k:"건물명",d:1}},
-  open: new Set()
+  open: new Set(),
+  memo: {}
 };
 const TODAY = new Date(); TODAY.setHours(0,0,0,0);
 
@@ -573,10 +587,17 @@ function ddayHTML(iso){
   else { cls = n <= 7 ? "soon" : (n <= 21 ? "near" : ""); label = `D-${n}`; }
   return `<span class="dday"><span class="datev mono">${fmtDate(iso)}</span><span class="dbadge ${cls}">${label}</span></span>`;
 }
-function moneyHTML(v){
+function moneyHTML(v, sub){
   const s = won(v);
   if(s === null) return `<span class="dash">—</span>`;
-  return `<span class="money num">${s}<small class="full">${Number(v).toLocaleString()}원</small></span>`;
+  const foot = sub ? esc(sub) : `${Number(v).toLocaleString()}원`;
+  return `<span class="money num">${s}<small class="full">${foot}</small></span>`;
+}
+
+/** 값 밑에 '14.5평 · 47.88㎡' 을 붙인다 — 얼마짜리가 몇 평인지 바로 보이게. */
+function moneyAreaHTML(v, r){
+  const a = areaM2(r);
+  return moneyHTML(v, a ? `${(a/PYEONG).toFixed(1)}평 · ${a.toFixed(2)}㎡` : null);
 }
 function gaugeHTML(v){
   const r = rate(v);
@@ -608,9 +629,9 @@ function perPyeong(r, tab){
   return (p && v > 0) ? v / p : null;
 }
 function perPyeongHTML(r){
-  const v = perPyeong(r), p = pyeong(r), a = areaM2(r);
+  const v = perPyeong(r);
   if(!v) return `<span class="dash">—</span>`;
-  return `<span class="money num">${won(Math.round(v))}<small class="full">${p.toFixed(1)}평 · ${a.toFixed(2)}㎡</small></span>`;
+  return `<span class="money num">${won(Math.round(v))}<small class="full">전용 기준</small></span>`;
 }
 
 function statusHTML(s){
@@ -623,7 +644,9 @@ function statusHTML(s){
 const COLS = {
   auction: [
     {k:"사건번호", w:"", sortable:true, cell:r =>
-      `<div class="case mono">${esc(r["사건번호"])}</div><div class="court">${esc(r["법원"] || "")}</div>`},
+      `<div class="case mono">${esc(r["사건번호"])}${r._group
+        ? `<span class="gbadge">물건 ${r._members.length}</span>` : ""}</div>` +
+      `<div class="court">${esc(r["법원"] || "")}</div>`},
     {k:"소재지 및 내역", cls:"addr span", sortable:true, cell:r => {
       const t = String(r["소재지 및 내역"] || "");
       const b = r["건물명"] ? esc(r["건물명"]) : "";
@@ -631,7 +654,7 @@ const COLS = {
       return `<div class="b">${b || esc(t)}</div>${b ? `<div class="d">${esc(rest)}</div>` : ""}`;
     }},
     {k:"기일", sortable:true, cell:r => ddayHTML(r["기일"])},
-    {k:"최저매각가격", cls:"r", sortable:true, cell:r => moneyHTML(r["최저매각가격"])},
+    {k:"최저매각가격", cls:"r", sortable:true, cell:r => moneyAreaHTML(r["최저매각가격"], r)},
     {k:"평당 최저가", cls:"r", sortable:true, cell:r => perPyeongHTML(r)},
     {k:"감정평가액", cls:"r", sortable:true, cell:r => moneyHTML(r["감정평가액"])},
     {k:"최저가율", sortable:true, cell:r => gaugeHTML(r["최저가율"])},
@@ -647,7 +670,7 @@ const COLS = {
     {k:"소재지 및 내역", cls:"addr span", sortable:true, cell:r =>
       `<div class="b">${esc(r["건물명"] || "")}</div><div class="d">${esc(r["소재지 및 내역"] || "")}</div>`},
     {k:"입찰시작일", sortable:true, cell:r => ddayHTML(r["입찰시작일"])},
-    {k:"최저입찰가", cls:"r", sortable:true, cell:r => moneyHTML(r["최저입찰가"])},
+    {k:"최저입찰가", cls:"r", sortable:true, cell:r => moneyAreaHTML(r["최저입찰가"], r)},
     {k:"평당 최저가", cls:"r", sortable:true, cell:r => perPyeongHTML(r)},
     {k:"감정평가액", cls:"r", sortable:true, cell:r => moneyHTML(r["감정평가액"])},
     {k:"최저가율", sortable:true, cell:r => {
@@ -680,6 +703,102 @@ const COLS = {
 /* ------------------------------------------------------------------ 원본보기
    법원경매·온비드 모두 물건별 직접 링크(GET)를 막아 두었다. 그래서 원본 사이트의
    검색 화면을 새 탭으로 열고, 붙여넣을 사건번호를 클립보드에 같이 담아 준다. */
+/* ------------------------------------------------------------------ 같은 사건 묶기
+   '2025타경512158 (1)' 과 '(2)' 는 한 사건에 딸린 물건번호 1·2번이다. 같은 건물
+   같은 층인 경우가 많아 따로 보면 오히려 헷갈린다. 한 줄로 합쳐 놓고(합산 최저가·
+   합산 평수·합산 평당) 펼치면 개별 물건을 따로 보여 준다.
+   묶는 열쇠는 추적키(법원코드:사건번호) — 물건번호가 빠진 사건 단위 열쇠다. */
+function caseKey(r){
+  const t = String(r["추적키"] || "").trim();
+  if(t) return t;
+  const no = String(r["사건번호"] || "").replace(/\s*\(\d+\)\s*$/, "").trim();
+  return no ? `${String(r["법원"] || "").trim()}|${no}` : "";
+}
+
+function rowKey(r){
+  return r._group ? "G:" + r._key : (r["물건키"] || r["사건번호"] || r["건물명"] || "");
+}
+
+/** 같은 사건이면 합친 한 줄로, 아니면 그대로. auction 탭에서만 묶는다. */
+function grouped(list, tab){
+  if(tab !== "auction") return list;
+  const buckets = new Map();
+  for(const r of list){
+    const k = caseKey(r);
+    if(!k){ buckets.set("_" + buckets.size, [r]); continue; }
+    (buckets.get(k) || buckets.set(k, []).get(k)).push(r);
+  }
+  const out = [];
+  for(const [k, items] of buckets){
+    if(items.length < 2){ out.push(items[0]); continue; }
+    items.sort((a, b) => String(a["사건번호"]).localeCompare(String(b["사건번호"]), "ko"));
+    const sum = key => items.reduce((t, r) => t + (Number(r[key]) || 0), 0);
+    const area = items.reduce((t, r) => t + (areaM2(r) || 0), 0);
+    const low = sum("최저매각가격"), app = sum("감정평가액");
+    const units = items.map(r => {
+      const t = String(r["소재지 및 내역"] || "");
+      const b = String(r["건물명"] || "");
+      return (b && t.startsWith(b) ? t.slice(b.length) : t).trim();
+    }).filter(Boolean);
+    out.push(Object.assign({}, items[0], {
+      _group: true, _key: k, _members: items,
+      "사건번호": String(items[0]["사건번호"]).replace(/\s*\(\d+\)\s*$/, "").trim(),
+      "소재지 및 내역": (items[0]["건물명"] || "") + " " + units.join(" · "),
+      "최저매각가격": low || null,
+      "감정평가액": app || null,
+      "최저가율": (app > 0 && low > 0) ? low / app : items[0]["최저가율"],
+      "전유면적": area || null,
+      "면적": area ? items.map(r => { const a = areaM2(r); return a ? a.toFixed(2) + "㎡" : "?"; }).join(" + ") : null,
+      "유찰": Math.max(...items.map(r => Number(r["유찰"] || 0)))
+    }));
+  }
+  return out;
+}
+
+/** 묶인 줄을 펼쳤을 때 보여 주는 개별 물건 표. */
+function membersHTML(r){
+  if(!r._group) return "";
+  const rows = r._members.map(m => {
+    const a = areaM2(m);
+    return `<tr>
+      <td class="mono">${esc(m["사건번호"])}</td>
+      <td>${esc(String(m["소재지 및 내역"] || "").replace(String(m["건물명"] || ""), "").trim())}</td>
+      <td class="r num">${a ? `${a.toFixed(2)}㎡<small>${(a/PYEONG).toFixed(1)}평</small>` : `<span class="dash">—</span>`}</td>
+      <td class="r num">${m["최저매각가격"] ? won(m["최저매각가격"]) + `<small>${Number(m["최저매각가격"]).toLocaleString()}원</small>` : `<span class="dash">—</span>`}</td>
+      <td class="r num">${perPyeong(m, "auction") ? won(Math.round(perPyeong(m, "auction"))) : `<span class="dash">—</span>`}</td>
+    </tr>`;
+  }).join("");
+  const a = areaM2(r);
+  return `<div class="deals members">
+    <div class="dh"><b>개별 물건 ${r._members.length}건</b>
+      <small>같은 사건이라 한 줄로 합쳤습니다 · 합산 ${a ? (a/PYEONG).toFixed(1) + "평" : "면적 불명"}</small></div>
+    <table class="dealt">
+      <thead><tr><th>사건번호</th><th>소재지</th><th class="r">전용면적</th><th class="r">최저매각가격</th><th class="r">평당</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>`;
+}
+
+/* ------------------------------------------------------------------ 메모
+   이 브라우저에만 남는다 — 사이트가 정적이라 서버에 보낼 곳이 없다.
+   data.json 을 새로 받아도 지워지지 않도록 저장 칸을 따로 쓴다. */
+function loadMemos(){
+  try{ return JSON.parse(localStorage.getItem("auction-board-memo") || "{}") || {}; }catch(e){ return {}; }
+}
+function saveMemos(){
+  try{ localStorage.setItem("auction-board-memo", JSON.stringify(STATE.memo)); return true; }catch(e){ return false; }
+}
+STATE.memo = loadMemos();
+function memoHTML(r){
+  const id = rowKey(r);
+  if(!id) return "";
+  const v = STATE.memo[id] || "";
+  return `<div class="memo">
+    <label for="memo-${esc(id)}">메모<span class="memohint" data-hint="${esc(id)}">${v ? "" : "이 브라우저에만 저장됩니다"}</span></label>
+    <textarea id="memo-${esc(id)}" data-memo="${esc(id)}" rows="2"
+      placeholder="임장 메모, 시세 판단, 확인할 것…">${esc(v)}</textarea>
+  </div>`;
+}
+
 const SOURCE_SITE = {
   auction: {
     url: "https://www.courtauction.go.kr/pgj/index.on?w2xPath=/pgj/ui/pgj100/PGJ151F00.xml",
@@ -866,7 +985,7 @@ function renderControls(){
 }
 
 function renderTable(){
-  const tab = STATE.tab, cols = COLS[tab], list = sorted(filtered());
+  const tab = STATE.tab, cols = COLS[tab], list = sorted(grouped(filtered(), tab));
   const {k:sk, d:sd} = STATE.sort[tab];
 
   document.getElementById("thead").innerHTML = "<tr>" + cols.map(c => {
@@ -882,7 +1001,7 @@ function renderTable(){
     return;
   }
   tbody.innerHTML = list.map((r, i) => {
-    const id = r["물건키"] || r["사건번호"] || r["건물명"] || String(i);
+    const id = rowKey(r) || String(i);
     const open = STATE.open.has(id);
     const tds = cols.map(c =>
       `<td class="${c.cls || ""}" data-label="${esc(c.k)}">${c.cell(r)}</td>`).join("");
@@ -892,8 +1011,10 @@ function renderTable(){
       return `<div class="f"><div class="k">${esc(k)}</div><div class="v ${/키$/.test(k) ? "mono" : ""}">${esc(v || "—")}</div></div>`;
     }).join("") + sourceHTML(r, tab);
     const deal = dealsHTML(r);
+    const badge = r._group ? `<span class="gbadge">물건 ${r._members.length}</span>` : "";
     return `<tr class="row ${open ? "open" : ""}" data-id="${esc(id)}">${tds}</tr>` +
-      (open ? `<tr class="detail"><td colspan="${cols.length}"><div class="det">${det}</div>${deal}</td></tr>` : "");
+      (open ? `<tr class="detail"><td colspan="${cols.length}">${memoHTML(r)}
+        <div class="det">${det}</div>${membersHTML(r)}${deal}</td></tr>` : "");
   }).join("");
 }
 
@@ -1067,7 +1188,26 @@ document.getElementById("thead").addEventListener("click", e => {
   renderTable();
 });
 
+let memoTimer = null;
+document.getElementById("tbody").addEventListener("input", e => {
+  const ta = e.target.closest("[data-memo]");
+  if(!ta) return;
+  const id = ta.dataset.memo, v = ta.value;
+  if(v.trim()) STATE.memo[id] = v; else delete STATE.memo[id];
+  const hint = document.querySelector(`[data-hint="${CSS.escape(id)}"]`);
+  clearTimeout(memoTimer);
+  memoTimer = setTimeout(() => {
+    const ok = saveMemos();
+    if(hint){
+      hint.textContent = ok ? "저장됨" : "저장 실패 — 브라우저 저장공간을 확인해 주세요";
+      hint.classList.toggle("bad", !ok);
+      setTimeout(() => { if(hint.textContent === "저장됨") hint.textContent = ""; }, 1600);
+    }
+  }, 400);
+});
+// 메모 칸을 눌렀다고 줄이 접히면 안 된다
 document.getElementById("tbody").addEventListener("click", e => {
+  if(e.target.closest(".memo")) return;
   const src = e.target.closest(".srcbtn");
   if(src){
     const no = src.dataset.copy;
