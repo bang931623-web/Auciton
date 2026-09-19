@@ -233,6 +233,11 @@ tr.detail td{background:var(--surface-2);border-bottom:1px solid var(--line);pad
 .det{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:12px 22px;padding:14px 12px 16px}
 .det .f .k{font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);font-weight:600}
 .det .f .v{font-size:13px;word-break:break-all}
+.srcbtn{display:inline-block;margin-top:2px;padding:4px 10px;border:1px solid var(--line-strong);
+  border-radius:6px;background:var(--surface);color:var(--accent-ink);font-size:12px;font-weight:600;
+  text-decoration:none;white-space:nowrap}
+.srcbtn:hover{background:var(--accent-soft);border-color:var(--accent)}
+.srchint{margin-top:5px;font-size:11px;color:var(--muted);word-break:keep-all;line-height:1.45}
 
 .empty{padding:44px 20px;text-align:center;color:var(--muted)}
 .empty b{display:block;color:var(--ink);font-weight:600;margin-bottom:4px;font-size:14px}
@@ -644,9 +649,36 @@ const COLS = {
   ]
 };
 
+/* ------------------------------------------------------------------ 원본보기
+   법원경매·온비드 모두 물건별 직접 링크(GET)를 막아 두었다. 그래서 원본 사이트의
+   검색 화면을 새 탭으로 열고, 붙여넣을 사건번호를 클립보드에 같이 담아 준다. */
+const SOURCE_SITE = {
+  auction: {
+    url: "https://www.courtauction.go.kr/pgj/index.on?w2xPath=/pgj/ui/pgj100/PGJ151F00.xml",
+    name: "법원경매정보"
+  },
+  onbid: {
+    url: "https://www.onbid.co.kr/op/ppa/plnmmnmt/publicAnnounceMentList.do",
+    name: "온비드"
+  }
+};
+
+function sourceHTML(r, tab){
+  const site = SOURCE_SITE[tab];
+  if(!site) return "";
+  // "2025타경1532 (2)" 의 (2) 는 보드가 붙인 물건번호라 검색창에서는 빼야 한다
+  const no = String(r["사건번호"] || "").replace(/\s*\(\d+\)\s*$/, "").trim();
+  return `<div class="f"><div class="k">원본보기</div><div class="v">` +
+    `<a class="srcbtn" href="${site.url}" target="_blank" rel="noopener"` +
+    ` data-copy="${esc(no)}" title="${esc(site.name)} 검색 화면이 새 탭에서 열립니다. 사건번호는 클립보드에 복사됩니다.">` +
+    `${esc(site.name)} ↗</a>` +
+    (no ? `<div class="srchint">누르면 <b>${esc(no)}</b> 복사 → 검색창에 붙여넣기</div>` : "") +
+    `</div></div>`;
+}
+
 const DETAIL_KEYS = {
-  auction: ["법원","면적","전유면적","다음 기일","최초등록","최근확인","물건키","추적키"],
-  onbid:   ["최초등록","최근확인","물건키"],
+  auction: ["법원","면적","전유면적","다음 기일","최초등록","최근확인"],
+  onbid:   ["최초등록","최근확인"],
   watch:   ["지번","사건번호","법원","최근실행","메모"]
 };
 
@@ -754,7 +786,7 @@ function renderTable(){
       let v = r[k];
       if(["다음 기일","최초등록","최근확인","최근실행"].includes(k)) v = fmtDate(v);
       return `<div class="f"><div class="k">${esc(k)}</div><div class="v ${/키$/.test(k) ? "mono" : ""}">${esc(v || "—")}</div></div>`;
-    }).join("");
+    }).join("") + sourceHTML(r, tab);
     return `<tr class="row ${open ? "open" : ""}" data-id="${esc(id)}">${tds}</tr>` +
       (open ? `<tr class="detail"><td colspan="${cols.length}"><div class="det">${det}</div></td></tr>` : "");
   }).join("");
@@ -930,6 +962,12 @@ document.getElementById("thead").addEventListener("click", e => {
 });
 
 document.getElementById("tbody").addEventListener("click", e => {
+  const src = e.target.closest(".srcbtn");
+  if(src){
+    const no = src.dataset.copy;
+    if(no) navigator.clipboard?.writeText(no).catch(() => {});
+    return;                       // 링크는 그대로 새 탭으로 열린다
+  }
   const del = e.target.closest("[data-del]");
   if(del){
     STATE.data.watch = STATE.data.watch.filter(r => r._id !== del.dataset.del);
