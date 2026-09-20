@@ -745,12 +745,36 @@ function dongOf(r){
   return m ? m[1] : null;
 }
 
-/** 같은 동 · 같은 층일 때만 묶는다. 읽어낼 수 없으면 다르다고 보지 않는다. */
+/** 호수를 '접두어 + 끝번호' 로 쪼갠다 — '1-223호'→{p:"1-",n:223}, '비234호'→{p:"비",n:234}.
+    층 표기 뒤쪽만 보고, 앞에 붙은 동은 떼어내서 접두어에 섞이지 않게 한다. */
+function hoOf(r){
+  const t = locTail(r);
+  const fm = t.match(/(?:지하\s*)?제?\s*\d+\s*층/);
+  let s = fm ? t.slice(fm.index + fm[0].length) : t;
+  s = s.replace(/^\s*(?:[가-힣]{1,3}|\d{1,4})동\s*/, "");
+  const m = s.match(/제?\s*([0-9A-Za-z가-힣\-]+?)\s*호/);
+  if(!m) return null;
+  const q = m[1].match(/^(.*?)(\d+)$/);
+  return q ? {p: q[1], n: Number(q[2])} : null;
+}
+
+/** 호수가 빈틈없이 이어지는지 — 671·672·673 은 통과, 671·673 은 탈락. */
+function sameRun(items){
+  const h = items.map(hoOf);
+  if(h.some(v => !v)) return true;                       // 못 읽으면 판정하지 않는다
+  if(new Set(h.map(v => v.p)).size > 1) return false;    // 접두어(1-, 3-, 비…)가 다르면 별개
+  const ns = [...new Set(h.map(v => v.n))].sort((a, b) => a - b);
+  if(ns.length !== items.length) return false;           // 같은 호수가 겹치면 별개
+  return ns[ns.length - 1] - ns[0] === items.length - 1;
+}
+
+/** 같은 동 · 같은 층 · 연번 호실일 때만 묶는다. 읽어낼 수 없으면 다르다고 보지 않는다. */
 function sameSpot(items){
   const f = items.map(floorOf).filter(v => v !== null);
   if(new Set(f).size > 1) return false;
   const d = items.map(dongOf).filter(v => v !== null);
-  return new Set(d).size <= 1;
+  if(new Set(d).size > 1) return false;
+  return sameRun(items);
 }
 
 function grouped(list, tab){
