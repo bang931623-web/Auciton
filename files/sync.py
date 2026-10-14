@@ -214,7 +214,7 @@ def main() -> int:
         b = ca.norm(building)
         for t in targets:
             tn = ca.norm(t["name"])
-            if b and tn and (tn in b or b in tn):
+            if ca.name_match(tn, b):
                 return t["min_fail"]
         return 2
 

@@ -57,6 +57,21 @@ def norm(s: str | None) -> str:
     return re.sub(r"[\s()\[\]·,\-_/㎡]", "", (s or "")).lower()
 
 
+def name_match(target: str, b: str) -> bool:
+    """감시 건물명(target)과 법원 물건의 건물명(b)이 같은 건물인지 (둘 다 norm 처리된 값).
+
+    - 법원 쪽이 더 길면 허용: '가산한화비즈메트로' ⊂ '가산한화비즈메트로2차'
+    - 법원 쪽이 줄여 쓴 이름이면 '앞부분'이 같고 5글자 이상일 때만 허용
+      ('청라더리브티아모' ← '청라더리브티아모지식산업센터')
+    - 이름 중간·끝 조각은 허용하지 않는다: '해오름' ⊄ '성강해오름타워', '유타워' ⊄ '힉스유타워'
+    """
+    if not target or not b:
+        return False
+    if target in b:
+        return True
+    return len(b) >= 5 and target.startswith(b)
+
+
 def _ymd(d: dt.date) -> str:
     return d.strftime("%Y%m%d")
 
@@ -382,7 +397,7 @@ class CourtAuction:
         for _once in (0,):
             for it in self._region_cache[ck]:
                 b = norm(it.building)
-                if not b or (target not in b and b not in target):
+                if not name_match(target, b):
                     continue
                 r = it.raw
                 if r.get("boCd") and r.get("saNo"):
@@ -418,7 +433,7 @@ class CourtAuction:
         for it in self.search(sido, sigungu, dong, today,
                               today + dt.timedelta(days=30 * months)):
             b = norm(it.building)
-            if not b or (target not in b and b not in target):
+            if not name_match(target, b):
                 continue
             r = it.raw
             # 다음 실행 때 검색 범위를 좁히기 위한 지역코드 학습
